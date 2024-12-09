@@ -70,8 +70,6 @@ class AppLogger(logging.Logger):
         log_file_fp = LOG_FOLDER + '/' +'log.log'
         if section.getint("singlefile",  fallback=0):
             log_file_fp = LOG_FOLDER + '/' + '_'.join(name.split('.')) + '.log'
-        
-        
         if 'level' in section:
             level = section["level"]
             self.setLevel(level)
