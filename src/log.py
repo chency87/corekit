@@ -87,7 +87,10 @@ class AppLogger(logging.Logger):
         from configparser import ConfigParser
         conf = ConfigParser()
         try:
-            config_fp = Path(__file__).parent.parent / 'log_config.ini'
+            config_fp = Path.cwd() / 'log_config.ini'
+            if not config_fp.exists():
+                # print('---')
+                config_fp = Path(__file__).parent.parent / 'log_config.ini'
             conf.read(str(config_fp.absolute()), encoding='utf-8')
         except Exception as e:
             ...
