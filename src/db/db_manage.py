@@ -11,7 +11,7 @@ else:
 from threading import Lock
 from typing import List, Tuple, Any, Dict, Union
 from collections import defaultdict
-from src.decorators import *
+from ..decorators import *
 import random
 
 logger = logging.getLogger(__name__)
