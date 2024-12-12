@@ -30,17 +30,22 @@ class Connect:
     def close(self):
         self.conn.close()
 
-    def execute(self, stmt, fetch: Union[str, int] = 'all'):
+    def execute(self, stmt, fetch: Union[str, int] = 'all', commit = False):
         r = self.conn.execute(text(stmt))
+        results = None
         if fetch == 'all':
-            return r.fetchall()
+            results = r.fetchall()
         elif fetch == 'one' or str(fetch) == '1':
-            return r.fetchone()
+            results = r.fetchone()
         elif fetch == 'random':
             samples = r.fetchmany(10)
-            self.result = random.choice(samples) if samples else []
+            results = random.choice(samples) if samples else []
         elif isinstance(fetch, int):
-            return r.fetchmany(fetch)
+            results = r.fetchmany(fetch)
+        
+        if commit:
+            self.conn.commit()
+        return results
         
     def create_tables(self, *ddls):
         for ddl in ddls:
@@ -142,7 +147,6 @@ class DBManager(metaclass = singletonMeta):
         engine = self._assert_engine(conn_str)
         metadata = MetaData()
         metadata.reflect(bind = engine)
-
         with engine.connect() as conn:
             for table_name, table in metadata.tables.items():
                 database_dump.append(str(CreateTable(table).compile(engine)))
@@ -156,3 +160,92 @@ class DBManager(metaclass = singletonMeta):
                     insert_stmt = f"INSERT INTO {table_name} ({columns}) VALUES ({values});"
                     database_dump.append(insert_stmt)
         return database_dump
+    
+    def export_sampledb(self, host_or_path, database, to, port = None, username = None, password = None,
+                        query = None, size = 10,  dialect = 'sqlite'):
+        
+        from sqlglot import parse_one, exp
+        must_contain = {}
+        if query is not None:
+            try:
+                expr = parse_one(sql = str(query), dialect = dialect)
+                for pred in expr.find_all(exp.Predicate):
+                    tables = set()
+                    for col in pred.find_all(exp.Column):
+                        tables.add(col.table)
+                    if len(tables) > 0 and len(tables) < 2:
+                        tbl = tables.pop()
+                        must_contain[tbl] = exp.select('*').from_(tbl).where(pred)
+            except Exception as e:
+                ...
+        
+        database_dump = []
+        schema_dump = []
+        conn_str = self._ensure_connection_string(host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)
+        engine = self._assert_engine(conn_str)
+        metadata = MetaData()
+        metadata.reflect(bind = engine)
+
+        with engine.connect() as conn:
+            for table_name, table in metadata.tables.items():
+                schema_dump.append(str(CreateTable(table).compile(engine)))
+                records_dump = []
+
+                pks_values = {}
+                for col_name, column in table.columns.items():
+                    if column.primary_key:
+                        pks_values[col_name] = []
+
+                stmt = table.select()
+                if table_name in must_contain:
+                    stmt = text(must_contain[table_name])
+                result = conn.execute(stmt)
+                for row in result:
+                    row = row._asdict()
+                    columns = ", ".join([f"`{k}`" for k in row.keys()])
+                    values = ", ".join(
+                        f"'{value}'" if value is not None else "NULL" for value in row.values()
+                    )
+                    insert_stmt = f"""INSERT INTO {table_name} ({columns}) VALUES ({values});"""
+                    # insert_stmt = f"INSERT INTO {table_name} (`{columns}`) VALUES ({values});"
+                    records_dump.append(insert_stmt)
+                    for pk in pks_values.keys():
+                        pks_values[pk].append(row.get(pk))
+                    
+                    if len(records_dump)> size:
+                        break
+                
+                
+                if len(result.all()) < size:
+                    # exp.select('*').from_(table_name).where(pred)
+                    cond = text(' and '.join([f"`{pk}` not in {tuple(vals)}" for pk, vals in pks_values.items()]))
+                    stmt = table.select().where(cond)
+                    cursor = conn.execute(stmt)
+                    result = cursor.fetchmany(size - len(result.all()))
+                    for row in result:
+                        row = row._asdict()
+                        columns = ", ".join([f"`{k}`" for k in row.keys()])
+                        # columns = ", ".join(row.keys())
+                        values = ", ".join(
+                            f"'{value}'" if value is not None else "NULL" for value in row.values()
+                        )
+                        # insert_stmt = f"""INSERT INTO {table_name} ("{columns}") VALUES ({values});"""
+                        insert_stmt = f"""INSERT INTO {table_name} ({columns}) VALUES ({values});"""
+                        records_dump.append(insert_stmt)
+                        for pk in pks_values.keys():
+                            pks_values[pk].append(row.get(pk))
+                else:
+                    records_dump = random.sample(records_dump, k= size)
+                database_dump.extend(records_dump)
+        
+        
+        self.create_database(schema_dump, database_dump, host_or_path= '', database= to)
+        
+        return schema_dump, database_dump
+        
+    def create_database(self, schemas: List[str], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
+
+        with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
+            conn.create_tables(*schemas)
+            for insert_stmt in inserts:
+                conn.execute(insert_stmt, fetch= None, commit= True)

@@ -1,13 +1,14 @@
 import logging
-import logging.config as logconfig
-import logging.config
+
 from logging.handlers import QueueListener
 import sys, atexit, asyncio, threading
-import multiprocessing
+# import multiprocessing
+from queue import Queue
+
 from datetime import datetime
 from typing import Optional, List, Union
 from pathlib import Path
-logging.config.fileConfig
+
 LOGGING_FILE_PREFIX = datetime.now().strftime('%Y-%m-%d_%H-%M') #_%H-%M-%S _%H_%M
 GLOBAL_LOGGER_HANDLERS: List[logging.Handler] = []
 
@@ -137,7 +138,7 @@ class AppLogger(logging.Logger):
             h.setFormatter(formatters[fmt])
         
         if section.get('queue', fallback = 0) and isinstance(h, logging.FileHandler):
-            queue = multiprocessing.Queue()
+            queue = Queue()
             listener = AsyncQueueListener(queue, h)
             self.addHandler(logging.handlers.QueueHandler(queue))
             GLOBAL_LOGGER_HANDLERS.append((listener, self))
@@ -166,7 +167,7 @@ class AppLogger(logging.Logger):
             formatter = logging.Formatter('%(message)s')
             file_handler.setFormatter(formatter)
             file_handler.setLevel(10)
-            queue = multiprocessing.Queue()
+            queue = Queue()
             listener = AsyncQueueListener(queue, file_handler)
             self.addHandler(logging.handlers.QueueHandler(queue))
             GLOBAL_LOGGER_HANDLERS.append((listener, self))
