@@ -1,184 +1,316 @@
-import logging
 
+
+
+from typing import List, Optional, Dict, NewType
 from logging.handlers import QueueListener
-import sys, atexit, asyncio, threading
-# import multiprocessing
-from queue import Queue
+import logging, os, sys
+from threading import Lock
 
-from datetime import datetime
-from typing import Optional, List, Union
-from pathlib import Path
+Unique_Id = NewType('Unique_Id', str)
 
-LOGGING_FILE_PREFIX = datetime.now().strftime('%Y-%m-%d_%H-%M') #_%H-%M-%S _%H_%M
-GLOBAL_LOGGER_HANDLERS: List[logging.Handler] = []
+def get_console_handler(level, formatter):
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(level)
+    return console_handler
 
-'''
-    Use QueueListener to implement async log modules 
-'''
+def get_file_handler(fp, level, formatter):
+    file_handler = logging.handlers.TimedRotatingFileHandler(fp, when='D', interval= 1, delay= True)
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+    return file_handler
 
-def assert_folder(fp):
-    if not Path(fp).exists():
-        Path(fp).mkdir(parents= True, exist_ok= True)
-    
-    return fp
+class TelemetryListener(QueueListener):
+    GLOBAL_HANDLERS: Dict[str, logging.Handler] = {}
+    '''
+        Use logging QueueListener to process all metrics related record.
+        use as:
+            logger = logging.getLogger()
+            logger.info('db_id: 5, eq:0', extra= {'to': /path/to/save})
+            logger.info('db_id: 5, eq:0', extra= {'to': /path/to/save})
+    '''
+    def __init__(self, queue, save_path):
+        super().__init__(queue, respect_handler_level=False)
+        self.save_path = save_path
+        self._lock = Lock()
 
+    def ensure_handler(self, hld_name, file_fp):
+        with self._lock:
+            if hld_name not in self.GLOBAL_HANDLERS:
+                handler = logging.FileHandler(filename= file_fp)
+                handler.setLevel('DEBUG')
+                self.GLOBAL_HANDLERS[hld_name] = handler
+        return self.GLOBAL_HANDLERS[hld_name]
 
-DEFAULT_LOG_FILE_PATH = 'logs/log.log'
-DEFAULT_INDIVIDUAL_FILE_PATH = 'logs/individual.log'
+    def handle(self, record):
+        """
+            Handle a record.
+            This just loops through the handlers offering them the record to handle.
+        """
+        record = self.prepare(record)
+        if isinstance(record, logging.LogRecord) and 'to' in record.__dict__:
+            to_ = getattr(record, 'to')
+            hld_fp = os.path.join(self.save_path, f'{to_}.log')
+            handler = self.ensure_handler(to_, hld_fp)
+            handler.handle(record)
 
-def _strip_spaces(alist):
-    return map(str.strip, alist)
-
-class AsyncQueueListener(QueueListener):
-    loop: Optional[asyncio.AbstractEventLoop] = None
-    def __init__(self, queue, *handlers: logging.Handler, respect_handler_level: bool = False) -> None:
-        super().__init__(queue, *handlers, respect_handler_level=respect_handler_level)
-
-    @classmethod
-    def _start(cls):
-        if cls.loop is None:            
-            cls.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(cls.loop)
-    def _monitor(self) -> None:
-        super()._monitor()
-
-    def stop(self) -> None:
-        if self.loop is not None:
-            self.loop.stop()
-            self.loop.close()
-        self.enqueue_sentinel()
-        if self._thread:
-            self._thread.join(1)
-            self._thread = None
-
-
-class AppLogger(logging.Logger):
-    def __init__(self, name, level = 0):
-        logging.Logger.__init__(self, name, level)
-        conf = self.fileconfig()
-        logger_keys = conf['loggers']['keys'].split(',')
-        name_prefix = name.split('.')[0]
-        if not self.handlers and name_prefix in logger_keys:
-            LOG_FOLDER =  assert_folder(f'logs/{LOGGING_FILE_PREFIX}')
-            self.setup_logger(conf, name,  LOG_FOLDER = LOG_FOLDER) 
-    def setup_logger(self, cp, name, LOG_FOLDER = 'logs'):
-
-        section_name = name.split('.')[0]
-        section_name = 'logger_%s' % section_name
-        if not cp.has_section(section_name):
-            return
-        section = cp[section_name]
-        log_file_fp = LOG_FOLDER + '/' +'log.log'
-        if section.getint("singlefile",  fallback=0):
-            log_file_fp = LOG_FOLDER + '/' + '_'.join(name.split('.')) + '.log'
-        if 'level' in section:
-            level = section["level"]
-            self.setLevel(level)
-        propagate = section.getint("propagate", fallback=1)
-        self.propagate = propagate
-        hlist = section["handlers"]
-        if len(hlist):
-            hlist = hlist.split(",")
-            hlist = _strip_spaces(hlist)
-            formatters = self._get_formatter(cp)
-            for hand in hlist:
-                self._setup_handler(cp, hand, formatters, LOG_FILE_PATH = log_file_fp )
-
-    def fileconfig(self):
-        from configparser import ConfigParser
-        conf = ConfigParser()
-        try:
-            config_fp = Path.cwd() / 'log_config.ini'
-            if not config_fp.exists():
-                # print('---')
-                config_fp = Path(__file__).parent.parent / 'log_config.ini'
-            conf.read(str(config_fp.absolute()), encoding='utf-8')
-        except Exception as e:
-            ...
-        return conf
-
-    def _get_formatter(self, cp):
-        flist = cp["formatters"]["keys"]
-        if not len(flist):
-            return {}
-        flist = flist.split(",")
-        flist = _strip_spaces(flist)
-        formatters = {}
-        for form in flist:
-            sectname = "formatter_%s" % form
-            fs = cp.get(sectname, "format", raw=True, fallback=None)
-            dfs = cp.get(sectname, "datefmt", raw=True, fallback=None)
-            stl = cp.get(sectname, "style", raw=True, fallback='%')
-            c = logging.Formatter
-            f = c(fs, dfs, stl)
-            formatters[form] = f
-        return formatters
-    def _setup_handler(self, cp, handler_name, formatters, **kwargs):
-        """Install and return handlers"""
-        section = cp["handler_%s" % handler_name]
-        klass = section["class"]
-        fmt = section.get("formatter", "")
-        try:
-            klass = eval(klass, vars(logging))
-        except (AttributeError, NameError):
-            raise NameError(f'could not initialize logger handler named: {handler_name}')
-        args = section.get("args", '()')
-        if '%LOG_FILE_PATH%' in args:
-            args = args.replace('%LOG_FILE_PATH%', kwargs.get('LOG_FILE_PATH', DEFAULT_LOG_FILE_PATH))
-        if 'LOG_INDIVIDUAL_PATH' in args:
-            args = args.replace('%LOG_INDIVIDUAL_PATH%', kwargs.get('LOG_FILE_PATH', DEFAULT_INDIVIDUAL_FILE_PATH))
-        args = eval(args, vars(logging))
-        kwargs = section.get("kwargs", '{}')
-        kwargs = eval(kwargs, vars(logging))
-        h = klass(*args, **kwargs)
-        if "level" in section:
-            level = section["level"]
-            h.setLevel(level)
-        if len(fmt):
-            h.setFormatter(formatters[fmt])
         
-        if section.get('queue', fallback = 0) and isinstance(h, logging.FileHandler):
-            queue = Queue()
-            listener = AsyncQueueListener(queue, h)
-            self.addHandler(logging.handlers.QueueHandler(queue))
-            GLOBAL_LOGGER_HANDLERS.append((listener, self))
-            listener.start()
-            atexit.unregister(_close_loggers)
-            atexit.register(_close_loggers)
-        else:
-            self.addHandler(h)
 
-    def setup_metrics_logger(self, cp, name: str, LOG_FILE_PATH):
-        name = name[8:]
-        section_name = f'logger_%s' % section_name
-        if cp.has_section(section_name):
-            section = cp[section_name]
-            if 'level' in section:
-                level = section["level"]
-                self.setLevel(level)
-            propagate = section.getint("propagate", fallback=1)
-            self.propagate = propagate
+# import logging
+
+# KEEP = 'keep'
+
+# def add_logging_level(level_name: str, level_num: int, method_name=None,
+#                       if_exists=KEEP, *, exc_info=False, stack_info=False):
+#     """
+#     Comprehensively adds a new logging level to the `logging` module and the
+#     currently configured logging class.
+
+#     `levelName` becomes an attribute of the `logging` module with the value
+#     `levelNum`. `method_name` becomes a convenience method for both `logging`
+#     itself and the class returned by `logging.getLoggerClass()` (usually just
+#     `logging.Logger`). If `method_name` is not specified, `levelName.lower()` is
+#     used.
+
+#     To avoid accidental clobberings of existing attributes, this method will
+#     raise an `AttributeError` if the level name is already an attribute of the
+#     `logging` module or if the method name is already present 
+
+#     Example
+#     -------
+#     >>> addLoggingLevel('TRACE', logging.DEBUG - 5)
+#     >>> logging.getLogger(__name__).setLevel("TRACE")
+#     >>> logging.getLogger(__name__).trace('that worked')
+#     >>> logging.trace('so did this')
+#     >>> logging.TRACE
+#     5
+
+#     """
+#     if not method_name:
+#         method_name = level_name.lower()
+
+#     if hasattr(logging, level_name):
+#        raise AttributeError('{} already defined in logging module'.format(level_name))
+#     if hasattr(logging, method_name):
+#        raise AttributeError('{} already defined in logging module'.format(method_name))
+#     if hasattr(logging.getLoggerClass(), method_name):
+#        raise AttributeError('{} already defined in logger class'.format(method_name))
+
+#     def for_logger_adapter(self, msg, *args, **kwargs):
+#         kwargs.setdefault('exc_info', exc_info)
+#         kwargs.setdefault('stack_info', stack_info)
+#         kwargs.setdefault('stacklevel', 2)
+#         self.log(level_num, msg, *args, **kwargs)
+
+#     def for_logger_class(self, msg, *args, **kwargs):
+#         if self.isEnabledFor(level_num):
+#             kwargs.setdefault('exc_info', exc_info)
+#             kwargs.setdefault('stack_info', stack_info)
+#             kwargs.setdefault('stacklevel', 2)
+#             self._log(level_num, msg, args, **kwargs)
+
+#     def for_logging_module(*args, **kwargs):
+#         kwargs.setdefault('exc_info', exc_info)
+#         kwargs.setdefault('stack_info', stack_info)
+#         kwargs.setdefault('stacklevel', 2)
+#         logging.log(level_num, *args, **kwargs)
+
+    
+#     def logForLevel(self, message, *args, **kwargs):
+#         if self.isEnabledFor(level_num):
+#             self._log(level_num, message, args, **kwargs)
+#     def logToRoot(message, *args, **kwargs):
+#         logging.log(level_num, message, *args, **kwargs)
+
+#     logging.addLevelName(level_num, level_name)
+#     setattr(logging, level_name, level_num)
+#     setattr(logging.getLoggerClass(), method_name, logForLevel)
+#     setattr(logging, method_name, logToRoot)
 
 
-        if not self.handlers:
-            target_folder = f'results/{LOGGING_FILE_PREFIX}'
-            assert_folder(target_folder)
-            file_handler = logging.FileHandler(filename = f'{target_folder}/{name}.log', mode = 'w')
-            formatter = logging.Formatter('%(message)s')
-            file_handler.setFormatter(formatter)
-            file_handler.setLevel(10)
-            queue = Queue()
-            listener = AsyncQueueListener(queue, file_handler)
-            self.addHandler(logging.handlers.QueueHandler(queue))
-            GLOBAL_LOGGER_HANDLERS.append((listener, self))
-            listener.start()
-            atexit.unregister(_close_loggers)
-            atexit.register(_close_loggers)
 
-logging.setLoggerClass(AppLogger)
 
-def _close_loggers():
-    while GLOBAL_LOGGER_HANDLERS:
-        listener, logger = GLOBAL_LOGGER_HANDLERS.pop()
-        logger.handlers = listener.handlers
-        listener.stop()
+# # import logging.handlers
+# # import logging, queue
+# # import atexit
+# # from typing import Dict, NewType
+# # from pathlib import Path
+# # from . import get_ctx
+
+# # # # from .context import get_ctx
+# # # import logging.handlers
+# # # from typing import List
+# # # GLOBAL_LOGGER_HANDLERS: List[logging.Handler] = []
+
+
+# # ## 1. set logger level
+
+# # ## 2. add queue handler 
+
+# # ## 3. implement a queue listener
+
+# # PROJECT_PATH = Path(__file__).resolve().parent.parent
+
+# # print(__file__)
+# # print(__name__)
+
+# # print(PROJECT_PATH.name)
+
+
+# # HANDLER_NAME = NewType('HANDLER_NAME', str)
+# # GLOBAL_HANDLERS: Dict[HANDLER_NAME, logging.Handler] = {}
+# # APP_ROOT_LOGGER = None
+
+# # import logging
+# # import sys
+# # from logging.handlers import TimedRotatingFileHandler
+# # FORMATTER = logging.Formatter("%(asctime)s — %(name)s — %(levelname)s — %(message)s")
+
+# # def get_console_handler(level = logging.DEBUG):
+# #    console_handler = logging.StreamHandler(sys.stdout)
+# #    console_handler.setFormatter(FORMATTER)
+# #    console_handler.setLevel(level)
+# #    return console_handler
+
+# # def get_file_handler(LOG_FILE):
+# #    file_handler = TimedRotatingFileHandler(LOG_FILE, when='D', interval= 1, delay= True)
+# #    file_handler.setFormatter(FORMATTER)
+# #    return file_handler
+
+# # def get_logger(logger_name):
+# #    logger = logging.getLogger(logger_name)
+# #    logger.setLevel(logging.DEBUG) # better to have too much log than not enough
+# #    logger.addHandler(get_console_handler())
+# #    logger.addHandler(get_file_handler())
+# #    # with this pattern, it's rarely necessary to propagate the error up to parent
+# #    return logger
+
+
+
+# # def setup_logger(root = __name__.split('.')[0]):
+# #     print(f'setup looger {root}')
+# #     corekit_logger = logging.getLogger(root)
+# #     # Set the logger's log level
+# #     corekit_logger.setLevel(logging.DEBUG)
+# #     # Set console handler
+# #     console_handler = logging.StreamHandler()
+# #     console_handler.setLevel(logging.DEBUG)
+# #     console_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - Line: %(lineno)d - %(message)s", datefmt= "%Y-%m-%d %H:%M:%S")
+# #     console_handler.setFormatter(console_formatter)
+# #     corekit_logger.addHandler(console_handler)
+# #     corekit_logger.addHandler(logging.StreamHandler())
+
+    
+
+
+# # setup_logger()
+
+
+
+
+# # import sys
+# # class AppLogger(logging.Logger):
+# #     def __init__(self, name, level = 0):
+# #         logging.Logger.__init__(self, name, level)
+# #         name_prefix = name.split('.')[0]
+
+# #         if not self.ensure_handler():
+# #             ...
+
+# #     def ensure_handler(self):
+# #         name = self.name
+# #         i = name.rfind(".")
+# #         rv = None
+# #         while (i > 0) and not rv:
+# #             substr = name[:i]
+# #             if substr in self.manager.loggerDict:
+# #                 alogger = self.manager.loggerDict[substr]
+# #                 if isinstance(alogger, logging.Logger) and alogger.hasHandlers():
+# #                     return True
+# #             i = name.rfind(".", 0, i - 1)        
+# #         return False
+
+# # #     def telemetry(self, msg, *args, exc_info = None, stack_info = False, stacklevel = 1, extra = None):        
+# # #         return self.info(msg, *args, exc_info=exc_info, stack_info=stack_info, stacklevel=stacklevel, extra=extra)
+    
+# # logging.setLoggerClass(AppLogger)
+# # logger = logging.getLogger('corekit')
+# # logger.addHandler(logging.StreamHandler())
+
+
+# # cklogger = logging.getLogger('corekit.src')
+
+# # logger1 = logging.getLogger('src.app.name1')
+# # logger2 = logging.getLogger('src.app.name1.l2')
+# # logger3 = logging.getLogger('src.app.name1.l3')
+# # logger4 = logging.getLogger('src.app3')
+
+
+# # print(f'{type(cklogger.parent)} --> {cklogger.parent.name}')
+# # print(f'{type(logger.parent)} --> {logger.parent.name}')
+# # print(f'{type(logger1.parent)} --> {logger1.parent.name}')
+
+
+# # # def config_logging():
+# # #     ...
+
+# # # # logging.addLevelName( 80, 'agent')
+
+# # # # logging._acquireLock()
+# # # # level_name = 'TELEMETRY'
+# # # # # registered_num = logging.getLevelName(level_name)
+# # # # # logger_class = logging.getLoggerClass()
+# # # # # logger_adapter = logging.LoggerAdapter
+
+# # # # # setattr(logging, level_name, level_num)
+# # # # setattr(logging.getLoggerClass(), 'telemetry', telemetry)
+# # # # method_name = 'telemetry'
+# # # # # setattr(logging, method_name, for_logging_module)
+# # # # # setattr(logger_class, method_name, for_logger_class)
+# # # # # setattr(logger_adapter, method_name, for_logger_adapter)
+
+# # # # logging._releaseLock()
+
+# # # logging.setLoggerClass(AppLogger)
+
+# # # logger = logging.getLogger('aggg')
+
+# # # l2 = logging.getLogger('aggg')
+
+# # # print(logger is l2)
+
+# # # # import sys
+# # # # logger.addHandler(logging.StreamHandler(stream = sys.stdout))
+# # # # logger.setLevel(logging.INFO)
+# # # # logger.telemetry('this is an agent message')
+
+# # # # l2 = logging.getLogger('aggg')
+# # # # # logger.manager.getLogger('aggg')
+# # # # ha = logging.FileHandler('logg.a', mode= 'w')
+# # # # ha.set_name('aa')
+# # # # hb = logging.FileHandler('logg.a',  mode= 'w')
+# # # # hb.set_name('aa')
+# # # # print(ha == hb)
+# # # # print(ha is hb)
+# # # # print(ha)
+# # # # print(hb)
+# # # # print(hb in [ha])
+# # # # print(ha.get_name())
+# # # # print(hb.get_name())
+
+# # # # ha.addFilter()
+
+
+# # # # class UptimeEndpointFilter(logging.Filter):
+# # # #     def filter(self, record: logging.LogRecord) -> bool:
+# # # #         # print(record)
+# # # #         # print(record.get('agent', ''))
+# # # #         print('agent' in record.__dict__)
+# # # #         if "GET /up" in record.msg:
+# # # #             return False
+# # # #         else:
+# # # #             return True
+# # # # logger.addFilter(UptimeEndpointFilter(name= 'filtera'))
+
+
+# # # # logger.info('aaaa, ext', extra= {'agent': True})

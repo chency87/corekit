@@ -1,12 +1,13 @@
-import logging
-from threading import Lock, Thread
+from threading import Lock
 
 def singleton(cls):
     instance = {}
+    _lock: Lock = Lock()
     def _singleton(*args, **kwargs):
-        if cls not in instance:
-            instance[cls] = cls(*args, **kwargs)
-        return instance[cls]
+        with _lock:
+            if cls not in instance:
+                instance[cls] = cls(*args, **kwargs)
+            return instance[cls]
     return _singleton
 
 class singletonMeta(type):

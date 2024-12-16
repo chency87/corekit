@@ -6,21 +6,13 @@ parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(parent_dir)
 
 
-from src import *
+from src.context import get_ctx
+import logging 
 
-import random, logging
-logger = logging.getLogger('src.query')
-metrics_logger =  logging.getLogger('metrics.query')
-
-agent_logger =  logging.getLogger('agent.worker1')
-
-# print(type(logger))
-
-logger.info('this is a test of log')
-logger.info('this is a test of log')
-logger.error('this is a test of log')
-logger.warning('this is a test of log')
-
-metrics_logger.info('this is a metrics')
-
-agent_logger.info('message from agent')
+c = get_ctx()
+logger = logging.getLogger('src.test')
+logger.info('this is a test log', extra = {})
+logger.warning('this is a warning message', extra = {'to': 'extra'})
+logger.warning('this is a warning message', extra = {'to': 'extra2'})
+logger.warning('this is a warning message', extra = {'to2': 'extra2'})
+logger.critical('this is a critical message')

@@ -11,38 +11,36 @@ else:
 from threading import Lock
 from typing import List, Tuple, Any, Dict, Union
 from collections import defaultdict
-from ..decorators import *
-import random
+from .. import singletonMeta
+import random, logging, os
+from sqlglot import parse_one, exp
+from .sample import sample_from_original_db
 
-logger = logging.getLogger(__name__)
-
+logger = logging.getLogger(f'src.db_manager')
 
 class Connect:
     def __init__(self, connection: Connection):
         self.conn: Connection = connection
-    
     def __enter__(self):
-        return self
-    
+        return self   
     def __exit__(self, exc_type, exc_value, exc_tb):
         self.close()
-
     def close(self):
         self.conn.close()
-
     def execute(self, stmt, fetch: Union[str, int] = 'all', commit = False):
         r = self.conn.execute(text(stmt))
+        results_sizes = {
+            'all' : lambda cur: cur.fetchall(),
+            'one':  lambda cur: cur.fetchone(),
+            '1':   lambda cur: cur.fetchone(),
+            'random': lambda cur: random.choice([] + cur.fetchmany(20)),
+            None: lambda cur: None,
+        }
         results = None
-        if fetch == 'all':
-            results = r.fetchall()
-        elif fetch == 'one' or str(fetch) == '1':
-            results = r.fetchone()
-        elif fetch == 'random':
-            samples = r.fetchmany(10)
-            results = random.choice(samples) if samples else []
+        if fetch in results_sizes:
+            results = results_sizes.get(fetch)(r)
         elif isinstance(fetch, int):
             results = r.fetchmany(fetch)
-        
         if commit:
             self.conn.commit()
         return results
@@ -53,8 +51,7 @@ class Connect:
 
     def drop_table(self, table_name):
         self.execute(f"DROP TABLE IF EXISTS {table_name}", fetch= None)
-
-
+    
 class DBManager(metaclass = singletonMeta):
     '''
         Maintain a connection pool to connect to various databases. Use as 
@@ -62,6 +59,10 @@ class DBManager(metaclass = singletonMeta):
             conn.create_tables(...)
             records = conn.execute(stmt, fetch = 'all')
     '''
+    CONNECTION_STR_MAPPING: Dict[str, URL] = {
+        'sqlite' : lambda host_or_path, port, username, password, database: URL.create("sqlite", database= os.path.join(host_or_path, database)),
+        'mysql':  lambda host_or_path, port, username, password, database: URL.create("mysql+mysqldb", username= username, password = password, host = host_or_path, port = port, database= database)
+    }
     def __init__(self, **kwargs):
         self.engines:Dict[str, Dict[str, Engine]] = defaultdict(dict)
         self.lock = Lock()
@@ -69,14 +70,6 @@ class DBManager(metaclass = singletonMeta):
 
     def set_options(self, key, value):
         setattr(self, key, value)
-
-    def _ensure_connection_string(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> URL:
-        import os
-        mapping = {
-            'sqlite' : lambda : URL.create("sqlite", database= os.path.join(host_or_path, database)),
-            'mysql':  lambda : URL.create("mysql+mysqldb", username= username, password = password, host = host_or_path, port = port, database= database)   
-        }
-        return mapping[dialect]()
 
     def _assert_engine(self, conn_str: URL, pool_size=20, max_overflow=10, pool_timeout=15, pool_recycle=60, **kwargs)-> Engine:
         host_or_path = conn_str.host or conn_str.database
@@ -101,21 +94,23 @@ class DBManager(metaclass = singletonMeta):
 
     def get_connection(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite',
                        pool_size=20, max_overflow=10, pool_timeout=15, pool_recycle=60, **kwargs) -> Connect:
-        conn_str = self._ensure_connection_string(host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)        
+        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
         engine = self._assert_engine(conn_str, pool_size, max_overflow, pool_timeout, pool_recycle, **kwargs)
         return Connect(connection= engine.connect())
 
     def get_schema(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> str:
-        conn_str = self._ensure_connection_string(host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)
+        '''
+            Return Schema definitaion of target database, return with a str. all ddls are connected by ';'
+        '''
+        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
         engine = self._assert_engine(conn_str)
         metadata = MetaData()
         metadata.reflect(bind = engine)
-
         schema = []
         for table_name, table in metadata.tables.items():
             ddl = str(CreateTable(table).compile(engine))
             schema.append(ddl)
-        return '\n'.join(schema)
+        return ';\n'.join(schema)
         
     def _get_checkouts(self, host_or_path) -> int:
         '''
@@ -141,111 +136,80 @@ class DBManager(metaclass = singletonMeta):
         logger.debug(f'Cleaned {unused} unused connections in the connection pool')
 
     def export_database(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> List[str]:
+        '''
+            Export entire database. Return a list of DDL and INSERT Statements
+        '''
         database_dump = []
-
-        conn_str = self._ensure_connection_string(host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)
+        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
         engine = self._assert_engine(conn_str)
         metadata = MetaData()
         metadata.reflect(bind = engine)
         with engine.connect() as conn:
             for table_name, table in metadata.tables.items():
-                database_dump.append(str(CreateTable(table).compile(engine)))
+                database_dump.append(str(CreateTable(table).compile(engine)).replace('\n',' ').replace('\t', ' ') + ';')
                 result = conn.execute(table.select())
-                for row in result:
-                    row = row._asdict()
-                    columns = ", ".join(row.keys())
-                    values = ", ".join(
-                        f"'{value}'" if value is not None else "NULL" for value in row.values()
-                    )
-                    insert_stmt = f"INSERT INTO {table_name} ({columns}) VALUES ({values});"
-                    database_dump.append(insert_stmt)
-        return database_dump
-    
-    def export_sampledb(self, host_or_path, database, to, port = None, username = None, password = None,
-                        query = None, size = 10,  dialect = 'sqlite'):
-        
-        from sqlglot import parse_one, exp
-        must_contain = {}
-        if query is not None:
-            try:
-                expr = parse_one(sql = str(query), dialect = dialect)
-                for pred in expr.find_all(exp.Predicate):
-                    tables = set()
-                    for col in pred.find_all(exp.Column):
-                        tables.add(col.table)
-                    if len(tables) > 0 and len(tables) < 2:
-                        tbl = tables.pop()
-                        must_contain[tbl] = exp.select('*').from_(tbl).where(pred)
-            except Exception as e:
-                ...
-        
-        database_dump = []
-        schema_dump = []
-        conn_str = self._ensure_connection_string(host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)
-        engine = self._assert_engine(conn_str)
-        metadata = MetaData()
-        metadata.reflect(bind = engine)
-
-        with engine.connect() as conn:
-            for table_name, table in metadata.tables.items():
-                schema_dump.append(str(CreateTable(table).compile(engine)))
-                records_dump = []
-
-                pks_values = {}
-                for col_name, column in table.columns.items():
-                    if column.primary_key:
-                        pks_values[col_name] = []
-
-                stmt = table.select()
-                if table_name in must_contain:
-                    stmt = text(must_contain[table_name])
-                result = conn.execute(stmt)
                 for row in result:
                     row = row._asdict()
                     columns = ", ".join([f"`{k}`" for k in row.keys()])
                     values = ", ".join(
                         f"'{value}'" if value is not None else "NULL" for value in row.values()
                     )
-                    insert_stmt = f"""INSERT INTO {table_name} ({columns}) VALUES ({values});"""
-                    # insert_stmt = f"INSERT INTO {table_name} (`{columns}`) VALUES ({values});"
-                    records_dump.append(insert_stmt)
-                    for pk in pks_values.keys():
-                        pks_values[pk].append(row.get(pk))
-                    
-                    if len(records_dump)> size:
-                        break
-                
-                
-                if len(result.all()) < size:
-                    # exp.select('*').from_(table_name).where(pred)
-                    cond = text(' and '.join([f"`{pk}` not in {tuple(vals)}" for pk, vals in pks_values.items()]))
-                    stmt = table.select().where(cond)
-                    cursor = conn.execute(stmt)
-                    result = cursor.fetchmany(size - len(result.all()))
-                    for row in result:
-                        row = row._asdict()
-                        columns = ", ".join([f"`{k}`" for k in row.keys()])
-                        # columns = ", ".join(row.keys())
-                        values = ", ".join(
-                            f"'{value}'" if value is not None else "NULL" for value in row.values()
-                        )
-                        # insert_stmt = f"""INSERT INTO {table_name} ("{columns}") VALUES ({values});"""
-                        insert_stmt = f"""INSERT INTO {table_name} ({columns}) VALUES ({values});"""
-                        records_dump.append(insert_stmt)
-                        for pk in pks_values.keys():
-                            pks_values[pk].append(row.get(pk))
-                else:
-                    records_dump = random.sample(records_dump, k= size)
-                database_dump.extend(records_dump)
+                    insert_stmt = f"INSERT INTO {table_name} ({columns}) VALUES ({values});"
+                    database_dump.append(insert_stmt)
+        return database_dump
         
+    def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]]], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
+        '''
+            Create a database instance on target host_or_path.
+        '''
+        ddls = []
+        if isinstance(schemas, list):
+            ddls.extend(schemas)
+        elif isinstance(schemas, dict):
+            '''
+            we should convert Dict schema to ddl firs
+            '''
+            for table_name, column_defs in schemas.items():
+                columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
+                ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
+                ddls.append(ddl.sql(dialect= dialect))
+        else:
+            raise ValueError(f'cannot parse schema {schemas}')
         
-        self.create_database(schema_dump, database_dump, host_or_path= '', database= to)
-        
-        return schema_dump, database_dump
-        
-    def create_database(self, schemas: List[str], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
-
         with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
-            conn.create_tables(*schemas)
+            conn.create_tables(*ddls)
             for insert_stmt in inserts:
                 conn.execute(insert_stmt, fetch= None, commit= True)
+
+    
+
+    def sample(self, queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
+               to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
+               size = 10, quote = True, dialect = 'sqlite') -> Tuple[Dict, List[str]]:
+
+        '''
+            Sample a small instance from original database to satisfy queries.
+        '''
+        ddls = self.get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect)
+
+        schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
+
+        inserts = []
+        
+        with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
+            for table_name, step in steps.items():
+                results = conn.execute(step, fetch= 'all')
+                for row in results:
+                    row = row._asdict()
+                    columns = ", ".join([f"`{k}`" for k in row.keys()])
+                    values = ", ".join(
+                        f"'{value}'" if value is not None else "NULL" for value in row.values()
+                    )
+                    insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
+                    inserts.append(insert_stmt)
+        
+        if to_host_or_path is not None and to_database is not None:
+            self.create_database(schemas, inserts, host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
+
+        
+        return schemas, inserts
