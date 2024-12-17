@@ -9,7 +9,7 @@ else:
     from sqlalchemy import create_engine, text, Connection, MetaData, Engine, URL
 
 from threading import Lock
-from typing import List, Tuple, Any, Dict, Union
+from typing import List, Tuple, Any, Dict, Union, Literal
 from collections import defaultdict
 from .. import singletonMeta
 import random, logging, os
@@ -147,17 +147,32 @@ class DBManager(metaclass = singletonMeta):
         with engine.connect() as conn:
             for table_name, table in metadata.tables.items():
                 database_dump.append(str(CreateTable(table).compile(engine)).replace('\n',' ').replace('\t', ' ') + ';')
+                
                 result = conn.execute(table.select())
                 for row in result:
                     row = row._asdict()
                     columns = ", ".join([f"`{k}`" for k in row.keys()])
-                    values = ", ".join(
-                        f"'{value}'" if value is not None else "NULL" for value in row.values()
-                    )
+                    values = ', '.join(escape_value(value) for value in row.values())    
                     insert_stmt = f"INSERT INTO {table_name} ({columns}) VALUES ({values});"
                     database_dump.append(insert_stmt)
         return database_dump
-        
+    
+    def export_db_rows(self, host_or_path, database, port = None, username = None, password = None, to_format: Literal['DATAFRAME', 'DICT'] = 'DATAFRAME', dialect = 'sqlite') -> Dict[str, Any]:
+        records = {}
+        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
+        engine = self._assert_engine(conn_str)
+        metadata = MetaData()
+        metadata.reflect(bind = engine)
+        with engine.connect() as conn:
+            for table_name, table in metadata.tables.items():
+                result = conn.execute(table.select())
+                if to_format.upper() == 'DATAFRAME':
+                    columns = list(table.columns.keys())
+                    records[table_name] = [columns] + [list(row) for row in result]
+                elif to_format.upper() == 'Dict':
+                    records[table_name] = [dict(row) for row in result]
+        return records
+
     def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]]], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
         '''
             Create a database instance on target host_or_path.
