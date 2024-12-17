@@ -168,7 +168,11 @@ class DBManager(metaclass = singletonMeta):
                 result = conn.execute(table.select())
                 if to_format.upper() == 'DATAFRAME':
                     columns = list(table.columns.keys())
-                    records[table_name] = [columns] + [list(row) for row in result]
+                    records[table_name] = [columns]
+
+                    for row in result:
+                        values = [escape_value(value) for value in row.values()]
+                        records[table_name].append(values)
                 elif to_format.upper() == 'Dict':
                     records[table_name] = [dict(row) for row in result]
         return records
@@ -237,7 +241,7 @@ class DBManager(metaclass = singletonMeta):
         
         return schemas, inserts
     
-
+from datetime import date, datetime
 def escape_value(value):
     """Escape single quotes and special characters in SQL strings."""
     if value is None:
@@ -248,5 +252,9 @@ def escape_value(value):
         return int(value)
     elif isinstance(value, float):
         return float(value)
+    elif isinstance(value, date):
+        return escape_value(value.strftime('%Y-%m%d'))
+    elif isinstance(value, datetime):
+        return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
     else:
         return value  # Use repr for other types
