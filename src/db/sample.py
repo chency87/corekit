@@ -81,18 +81,20 @@ def extract_predicates(schema, queries: List[str], dialect = 'sqlite', size  = 5
         expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote)
         for tbl in expr.find_all(exp.Table):
             table_alias[tbl.name].append(str(tbl.alias))
-        ## process Join Parts
-        for join in expr.find_all(exp.Join):
-            # logger.info(join.find_ancestor(exp.Select).args.get('from'))
-            from_ = join.find_ancestor(exp.Select).args.get('from')
-
-            for ident in join.find_all(exp.Column):
-                table_joins[str(ident.table)]['from'] = from_
-                if 'join' not in table_joins[str(ident.table)]:
-                    table_joins[str(ident.table)]['join'] = []
-                table_joins[str(ident.table)]['join'].append(join)
-
+        
         selects = expr.find_all(exp.Select)
+
+        for select in selects:
+            from_ = select.args.get('from')
+            joins = select.args.get("joins")
+            if joins:
+                for join in joins:
+                    for join_tbl in join.find_all(exp.Column):
+                        table_joins[str(join_tbl.table)]['from'] = from_
+                        if 'join' not in table_joins[str(join_tbl.table)]:
+                            table_joins[str(join_tbl.table)]['join'] = set()
+                        table_joins[str(join_tbl.table)]['join'].update(joins)
+       
 
         for select in selects:
             where = select.args.get("where")

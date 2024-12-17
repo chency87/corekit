@@ -194,6 +194,11 @@ class DBManager(metaclass = singletonMeta):
 
         schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
 
+        for t, st in steps.items():
+            logger.info(st)
+
+        logger.info(schemas)
+
         inserts = []
         with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
             for table_name, step in steps.items():
@@ -201,9 +206,13 @@ class DBManager(metaclass = singletonMeta):
                 for row in results:
                     row = row._asdict()
                     columns = ", ".join([f"`{k}`" for k in row.keys()])
-                    values = ", ".join(
-                        f"'{value}'" if value is not None else "NULL" for value in row.values()
-                    )
+                    
+                    values = ', '.join(escape_value(value) for value in row.values())
+
+
+                    # values = ", ".join(
+                    #     f"'{value}'" if value is not None else "NULL" for value in row.values()
+                    # )
                     insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
                     inserts.append(insert_stmt)
         
@@ -212,3 +221,13 @@ class DBManager(metaclass = singletonMeta):
 
         
         return schemas, inserts
+    
+
+def escape_value(value):
+    """Escape single quotes and special characters in SQL strings."""
+    if value is None:
+        return "NULL"
+    elif isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"  # Escape single quotes
+    else:
+        return repr(value)  # Use repr for other types
