@@ -89,7 +89,7 @@ class DBManager(metaclass = singletonMeta):
                     pool_recycle=pool_recycle
                 )
                 self.engines[host_or_path][conn_str] = engine
-                logger.info(f'create new connection for {conn_str}')
+                logger.debug(f'create new connection for {conn_str}')
             return self.engines[host_or_path][conn_str]
 
     def get_connection(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite',
@@ -209,10 +209,10 @@ class DBManager(metaclass = singletonMeta):
 
         schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
 
-        for t, st in steps.items():
-            logger.info(st)
+        # for t, st in steps.items():
+        #     logger.info(st)
 
-        logger.info(schemas)
+        # logger.info(schemas)
 
         inserts = []
         with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
@@ -244,5 +244,9 @@ def escape_value(value):
         return "NULL"
     elif isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"  # Escape single quotes
+    elif isinstance(value, int):
+        return int(value)
+    elif isinstance(value, float):
+        return float(value)
     else:
-        return repr(value)  # Use repr for other types
+        return value  # Use repr for other types
