@@ -25,7 +25,7 @@ def sample_from_original_db(ddls: str, queries: Union[str, List[str]], size = 10
     schema = jsonify_ddl(ddls, dialect= dialect)
 
     schema = remove_table_columns(schema, queries = queries )
-    logger.info(schema)
+    # logger.info(schema)
 
     table_alias, table_condition, table_joins = extract_predicates(schema, queries, dialect= dialect, size= size, quote= quote)
 
@@ -83,7 +83,7 @@ def extract_predicates(schema, queries: List[str], dialect = 'sqlite', size  = 5
             table_alias[tbl.name].append(str(tbl.alias))
         ## process Join Parts
         for join in expr.find_all(exp.Join):
-            logger.info(join.find_ancestor(exp.Select).args.get('from'))
+            # logger.info(join.find_ancestor(exp.Select).args.get('from'))
             from_ = join.find_ancestor(exp.Select).args.get('from')
 
             for ident in join.find_all(exp.Column):

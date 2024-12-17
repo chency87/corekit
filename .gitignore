@@ -162,6 +162,8 @@ cython_debug/
 #.idea/
 logs/*
 
-tests/*.sqlite
 tests/gretel/*
+
+tests/*.sqlite
+
 src/log_backup.py
