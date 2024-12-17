@@ -169,8 +169,8 @@ class DBManager(metaclass = singletonMeta):
                 if to_format.upper() == 'DATAFRAME':
                     columns = list(table.columns.keys())
                     records[table_name] = [columns]
-
                     for row in result:
+                        row = row._asdict()
                         values = [escape_value(value) for value in row.values()]
                         records[table_name].append(values)
                 elif to_format.upper() == 'Dict':
