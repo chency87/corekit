@@ -195,7 +195,6 @@ class DBManager(metaclass = singletonMeta):
         schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
 
         inserts = []
-        
         with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
             for table_name, step in steps.items():
                 results = conn.execute(step, fetch= 'all')

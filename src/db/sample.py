@@ -92,11 +92,18 @@ def extract_predicates(schema, queries: List[str], dialect = 'sqlite', size  = 5
                     table_joins[str(ident.table)]['join'] = []
                 table_joins[str(ident.table)]['join'].append(join)
 
-        ## build where parts
-        for pred in expr.find_all(exp.Predicate):
-            if 0 < len(exp.column_table_names(pred)) < 2:
-                tbl = exp.column_table_names(pred).pop()
-                table_conditions[tbl].append(pred)
+        selects = expr.find_all(exp.Select)
+
+        for select in selects:
+            where = select.args.get("where")
+            
+            if where:
+                # print(repr(where))
+                ## build where parts
+                for pred in where.find_all(exp.Predicate):
+                    if 0 < len(exp.column_table_names(pred)) < 2:
+                        tbl = exp.column_table_names(pred).pop()
+                        table_conditions[tbl].append(pred)
     # logger.info(table_joins)
     return table_alias, table_conditions, table_joins
 
@@ -121,7 +128,8 @@ def build_additional_parts(columns: List[str], table_name: str, tsize, avail_ste
     step_alias =  exp.TableAlias(this = exp.to_identifier( f'step{len(avail_steps)}'))
     addsitional_rows_alias = exp.TableAlias(this = exp.to_identifier( f'additional_{len(avail_steps)}'))
     table = exp.to_table(table_name, alias = addsitional_rows_alias)
-    column_defs = [exp.to_column(col, table = addsitional_rows_alias.this, quoted= quote) for col in columns]
+    
+    column_defs = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = addsitional_rows_alias.this) for col in columns]
 
     ## total count of previous ctes
     counts = [exp.Literal.number(tsize)]
@@ -129,7 +137,8 @@ def build_additional_parts(columns: List[str], table_name: str, tsize, avail_ste
         counts.append(exp.select('count(*)').from_(cte.alias_or_name))
     limit_ = reduce(lambda x, y : exp.Sub(this = x, expression = exp.Subquery(this = y) if not isinstance(y, exp.Subquery) else y), counts)
 
-    body_columns = [exp.to_column(col, table = step_alias.this, quoted= quote) for col in columns]
+    
+    body_columns = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = step_alias.this) for col in columns]
     e = exp.Select(expressions = body_columns).from_(step_alias)
     return build_with_clause(stmt= exp.Select(expressions = column_defs).from_(table).order_by(exp.func('RANDOM')).limit(limit_), alias= step_alias), e
 
@@ -143,7 +152,8 @@ def build_query(schema, table_alias: Dict[str, List[str]], table_conditions: Dic
         for index, alias in enumerate(list_alias):
             alias_identifier =  exp.to_identifier(alias)
             table = exp.to_table(table_name, alias = exp.TableAlias(this = alias_identifier))
-            col = [exp.to_column(col, table = alias_identifier, quoted= quote) for col in schema[table_name]]
+
+            col = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = alias_identifier) for col in schema[table_name]]
             stmt = exp.Select(expressions = col)
 
             if table_joins.get(alias, {}):
@@ -166,7 +176,7 @@ def build_query(schema, table_alias: Dict[str, List[str]], table_conditions: Dic
 
             steps[table_name].append(build_with_clause(stmt, alias= step_alias))
             ## process body queries
-            body_columns = [exp.to_column(col, table = step_alias.this, quoted= quote) for col in schema[table_name]]
+            body_columns = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = step_alias.this) for col in schema[table_name]]
             bodies[table_name].append(exp.Select(expressions = body_columns).from_(step_alias))
     queries = {}
     for table_name, parts in bodies.items():
