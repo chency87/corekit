@@ -14,5 +14,9 @@ logger = logging.getLogger('src.test')
 logger.info('this is a test log', extra = {})
 logger.warning('this is a warning message', extra = {'to': 'extra'})
 logger.warning('this is a warning message', extra = {'to': 'extra2'})
-logger.warning('this is a warning message', extra = {'to2': 'extra2'})
+logger.warning('this is a warning message', extra = {'to': 'extra2'})
+
+logger.warning({'id' : 20, 'name': 'alice', 'message': 'this is a warning message'}, extra = {'to': 'extra2'})
+
+
 logger.critical('this is a critical message')

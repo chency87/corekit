@@ -20,6 +20,18 @@ def get_file_handler(fp, level, formatter):
     file_handler.setLevel(level)
     return file_handler
 
+
+import ast, json
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        message = record.msg if isinstance(record.msg, dict) else record.getMessage()
+        try:
+            msg = ast.literal_eval(message)
+            message = json.dumps(msg)
+        finally:
+            return message
+
 class TelemetryListener(QueueListener):
     GLOBAL_HANDLERS: Dict[str, logging.Handler] = {}
     '''
@@ -39,6 +51,7 @@ class TelemetryListener(QueueListener):
             if hld_name not in self.GLOBAL_HANDLERS:
                 handler = logging.FileHandler(filename= file_fp)
                 handler.setLevel('DEBUG')
+                handler.setFormatter(JsonFormatter())
                 self.GLOBAL_HANDLERS[hld_name] = handler
         return self.GLOBAL_HANDLERS[hld_name]
 
