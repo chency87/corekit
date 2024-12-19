@@ -182,9 +182,11 @@ def build_query(schema, table_alias: Dict[str, List[str]], table_conditions: Dic
             bodies[table_name].append(exp.Select(expressions = body_columns).from_(step_alias))
     queries = {}
     for table_name, parts in bodies.items():
-        additional_cte, additional_main_part = build_additional_parts(list(schema[table_name].keys()), table_name= table_name, tsize= size, avail_steps= steps[table_name], primary_keys= [])
-        parts_ = [*parts, additional_main_part]
-        ctes = [*steps[table_name], additional_cte]
+        # additional_cte, additional_main_part = build_additional_parts(list(schema[table_name].keys()), table_name= table_name, tsize= size, avail_steps= steps[table_name], primary_keys= [])
+        # parts_ = [*parts, additional_main_part]
+        # ctes = [*steps[table_name], additional_cte]
+        ctes = steps[table_name]
+        parts_ = parts
         body = build_main_part(parts_).limit(size)
         body.set('with', exp.With(expressions = ctes))
         queries[table_name] = body.sql(dialect= dialect)
