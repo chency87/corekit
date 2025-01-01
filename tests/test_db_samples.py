@@ -53,26 +53,20 @@ def test_sample_small_db(original_host_or_path, original_db,  queries: List[str]
 
 
 
-
-# # sql = """SELECT T2.Zip FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T1.`District Name` = 'Fresno County Office of Education' AND T1.`Charter School (Y/N)` = 1"""
-# sql = """SELECT `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)` FROM frpm WHERE `Educational Option Type` = 'Continuation School' AND `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)` IS NOT NULL ORDER BY `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)` ASC LIMIT 3"""
-# # sql = """SELECT T2.MailStreet FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode where T1.CDSCode = '200' ORDER BY T1.`FRPM Count (K-12)` DESC LIMIT 1"""
-
-# sql = """SELECT COUNT(T2.School) FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T2.County = 'Los Angeles' AND T2.Charter = 0 AND CAST(T1.`Free Meal Count (K-12)` AS REAL) * 100 / T1.`Enrollment (K-12)` < 0.18"""
-
 # # print(repr(parse_one(sql, dialect = 'sqlite')))
 sql = """SELECT DISTINCT T2.account_id FROM trans AS T1 INNER JOIN account AS T2 ON T1.account_id = T2.account_id INNER JOIN district AS T3 ON T2.district_id = T3.district_id WHERE T1.k_symbol = 'SIPO' AND T3.A2 = 'Pisek'"""
 # test_sample_samll_database('./tests', 'financial.sqlite', sql, to_host_or_path= './tests', to_database= 'db_142.sqlite')
 
 # test_predicates_extraction()
+sql = """SELECT DISTINCT T1.ID, T1.SEX, T1.Birthday FROM Patient AS T1 INNER JOIN Laboratory AS T2 ON T1.ID = T2.ID WHERE T2.WBC <= 3.5 OR T2.WBC >= 9.0 GROUP BY T1.SEX,T1.ID ORDER BY T1.Birthday ASC"""
 
-test_sample_small_db('./tests', 'financial.sqlite', sql, to_host_or_path= './tests', to_database= 'db_142.sqlite')
+
+DB_ROOT_PATH = "../Dockers/autotest/.results/bird/dev/dev_databases"
+test_sample_small_db(DB_ROOT_PATH, 'thrombosis_prediction/thrombosis_prediction.sqlite', sql, to_host_or_path= './tests', to_database= 'db_1234.sqlite')
 
 
 # insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
 # print(repr(parse_one("INSERT INTO tbl (col1, col2, col3) values (1, 2, 3)")))
-
-
 # Insert(
 #   this=Schema(
 #     this=Table(

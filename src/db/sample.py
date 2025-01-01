@@ -63,7 +63,6 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
     '''
     if not isinstance(queries, list):
         queries = [queries]
-    
     schema = jsonify_ddl(ddls, dialect= dialect)
     schema = remove_tables(schema, queries)
     
@@ -115,7 +114,7 @@ def jsonify_ddl(ddls, dialect = 'sqlite'):
         columns = OrderedDict()
         for column_def in expr.find_all(exp.ColumnDef):
             columns[column_def.alias_or_name] = str(column_def.kind)
-        schema[tbl_name] = columns
+        schema[tbl_name.lower()] = columns
     return schema
 
 
@@ -128,12 +127,12 @@ def remove_tables(schema: Dict[str, Dict[str, str]], queries: List[str], dialect
     for query in queries:
         expr = parse_one(sql = str(query), dialect = dialect)
         for tbl in expr.find_all(exp.Table):
-            tables.add(tbl.this.name)
-    
+            tables.add(tbl.this.name.lower())
+
     new_schema = {}
     for tbl, column_defs in schema.items():
-        if tbl in tables:
-            new_schema[tbl] = {column_name: column_typ for column_name, column_typ in column_defs.items()}
+        if tbl.lower() in tables:
+            new_schema[tbl.lower()] = {column_name: column_typ for column_name, column_typ in column_defs.items()}
     return new_schema
 
 def remove_columns(schema: Dict[str, Dict[str, str]], queries: List[str], dialect = 'sqlite'):
@@ -190,19 +189,17 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
         >>> SELECT T1.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE CAST(T1.`Free Meal Count (K-12)` AS REAL) * 100 / T1.`Enrollment (K-12)` < 0.18
         >>> SELECT T2.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T2.County = 'Los Angeles' AND T2.Charter = 0
     '''
-    expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote)    
+    expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote, qualify_columns= False)
     selects = expr.find_all(exp.Select) ## main select and subqueries
     statements = {}
     table_alias = defaultdict(list)
     for select in selects:
         for tbl in select.find_all(exp.Table):
-            table_alias[tbl.name].append(str(tbl.alias))
-            col = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = tbl.alias) for col in schema[tbl.name]]
+            tbl_name = tbl.name.lower()
+            table_alias[tbl_name].append(str(tbl.alias))
+            col = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = tbl.alias) for col in schema[tbl_name]]
             stmt = select.copy()
             stmt.set('expressions', col)
-            # stmt.expressions = col
-            # stmt.order_by
-            # stmt = stmt.order_by("")
             stmt.set('order', None)
             stmt.set('limit', None)
             statements[str(tbl.alias)] =  stmt
