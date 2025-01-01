@@ -59,10 +59,10 @@ sql = """SELECT DISTINCT T2.account_id FROM trans AS T1 INNER JOIN account AS T2
 
 # test_predicates_extraction()
 sql = """SELECT DISTINCT T1.ID, T1.SEX, T1.Birthday FROM Patient AS T1 INNER JOIN Laboratory AS T2 ON T1.ID = T2.ID WHERE T2.WBC <= 3.5 OR T2.WBC >= 9.0 GROUP BY T1.SEX,T1.ID ORDER BY T1.Birthday ASC"""
-
+sql = """SELECT AVG(PostId) FROM votes WHERE UserId IN ( SELECT Id FROM users WHERE Age = ( SELECT MAX(Age) FROM users ) )"""
 
 DB_ROOT_PATH = "../Dockers/autotest/.results/bird/dev/dev_databases"
-test_sample_small_db(DB_ROOT_PATH, 'thrombosis_prediction/thrombosis_prediction.sqlite', sql, to_host_or_path= './tests', to_database= 'db_1234.sqlite')
+test_sample_small_db(DB_ROOT_PATH, 'codebase_community/codebase_community.sqlite', sql, to_host_or_path= './tests', to_database= 'db_673.sqlite')
 
 
 # insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"

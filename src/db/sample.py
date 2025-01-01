@@ -37,6 +37,8 @@ def sample_small_db(queries: List[str], original_host_or_path, original_database
     ddls = DBManager().get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect)
     schema, stmts = sample_data_from_original_db(ddls, queries, random_order= random_order, dialect= dialect, size= size, quote= quote)
 
+    # print(stmts)
+
     inserts = []
     with DBManager().get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
         for table_name, stmt in stmts.items():
@@ -64,6 +66,7 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
     if not isinstance(queries, list):
         queries = [queries]
     schema = jsonify_ddl(ddls, dialect= dialect)
+    
     schema = remove_tables(schema, queries)
     
     samples = {}
@@ -197,13 +200,14 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
     for select in selects:
         for tbl in select.find_all(exp.Table):
             tbl_name = tbl.name.lower()
-            table_alias[tbl_name].append(str(tbl.alias))
+            table_alias[tbl_name].append(tbl.alias_or_name)
             col = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = tbl.alias) for col in schema[tbl_name]]
             stmt = select.copy()
             stmt.set('expressions', col)
             stmt.set('order', None)
             stmt.set('limit', None)
-            statements[str(tbl.alias)] =  stmt
+            statements[str(tbl.alias_or_name)] =  stmt
+            
             # stmt.limit(size)
         # if random_order:
         #     for alias in statements:
