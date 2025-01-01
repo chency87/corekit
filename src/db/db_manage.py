@@ -14,7 +14,7 @@ from collections import defaultdict
 from .. import singletonMeta
 import random, logging, os
 from sqlglot import parse_one, exp
-from .sample import sample_from_original_db
+# from .sample import sample_from_original_db
 
 logger = logging.getLogger(f'src.db_manager')
 
@@ -202,44 +202,44 @@ class DBManager(metaclass = singletonMeta):
 
     
 
-    def sample(self, queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
-               to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
-               size = 10, quote = True, dialect = 'sqlite') -> Tuple[Dict, List[str]]:
+    # def sample(self, queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
+    #            to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
+    #            size = 10, quote = True, dialect = 'sqlite') -> Tuple[Dict, List[str]]:
 
-        '''
-            Sample a small instance from original database to satisfy queries.
-        '''
-        ddls = self.get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect)
+    #     '''
+    #         Sample a small instance from original database to satisfy queries.
+    #     '''
+    #     ddls = self.get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect)
 
-        schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
+    #     schemas, steps = sample_from_original_db(ddls, queries, size= size, quote= quote, dialect = dialect)
 
-        # for t, st in steps.items():
-        #     logger.info(st)
+    #     # for t, st in steps.items():
+    #     #     logger.info(st)
 
-        # logger.info(schemas)
+    #     # logger.info(schemas)
 
-        inserts = []
-        with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
-            for table_name, step in steps.items():
-                results = conn.execute(step, fetch= 'all')
-                for row in results:
-                    row = row._asdict()
-                    columns = ", ".join([f"`{k}`" for k in row.keys()])
+    #     inserts = []
+    #     with self.get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
+    #         for table_name, step in steps.items():
+    #             results = conn.execute(step, fetch= 'all')
+    #             for row in results:
+    #                 row = row._asdict()
+    #                 columns = ", ".join([f"`{k}`" for k in row.keys()])
                     
-                    values = ', '.join(escape_value(value) for value in row.values())
+    #                 values = ', '.join(escape_value(value) for value in row.values())
 
 
-                    # values = ", ".join(
-                    #     f"'{value}'" if value is not None else "NULL" for value in row.values()
-                    # )
-                    insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
-                    inserts.append(insert_stmt)
+    #                 # values = ", ".join(
+    #                 #     f"'{value}'" if value is not None else "NULL" for value in row.values()
+    #                 # )
+    #                 insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
+    #                 inserts.append(insert_stmt)
         
-        if to_host_or_path is not None and to_database is not None:
-            self.create_database(schemas, inserts, host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
+    #     if to_host_or_path is not None and to_database is not None:
+    #         self.create_database(schemas, inserts, host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
 
         
-        return schemas, inserts
+    #     return schemas, inserts
     
 from datetime import date, datetime
 def escape_value(value):
