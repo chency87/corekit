@@ -198,6 +198,8 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
             stmt = select.copy()
             stmt.set('expressions', col)
             # stmt.expressions = col
+            # stmt.order_by
+            stmt = stmt.order_by("")
             statements[str(tbl.alias)] = stmt.limit(size)
         # if random_order:
         #     for alias in statements:
