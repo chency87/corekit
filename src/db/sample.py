@@ -199,9 +199,9 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
             stmt.set('expressions', col)
             # stmt.expressions = col
             statements[str(tbl.alias)] = stmt.limit(size)
-        if random_order:
-            for alias in statements:
-                statements[alias] = statements[alias].order_by(exp.func('random', dialect= dialect))
+        # if random_order:
+        #     for alias in statements:
+        #         statements[alias] = statements[alias].order_by(exp.func('random', dialect= dialect))
     
     return merge_samples_by_table(table_alias, statements)
 
