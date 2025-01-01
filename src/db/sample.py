@@ -77,6 +77,7 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
                 samples[tbl] = stmt
     for tbl in samples:
         samples[tbl] = samples[tbl].limit(size)
+        samples[tbl] = samples[tbl].sql(dialect = dialect)
     return schema, samples
 
 
@@ -178,7 +179,7 @@ def merge_samples_by_table(table_alias, statements: Dict, dialect = 'sqlite'):
         stmt = statements[tbl_alias.pop()]
         for alias in tbl_alias:
             stmt = exp.union(stmt, statements[alias])
-        stmts[tbl_name] = stmt.sql(dialect= dialect)
+        stmts[tbl_name] = stmt
     return stmts
 
 def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect = 'sqlite', random_order = True, size = 10, quote = True):
