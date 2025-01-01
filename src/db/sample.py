@@ -75,6 +75,8 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
                 samples[tbl] = exp.union(samples[tbl], stmt, dialect= dialect)
             else:
                 samples[tbl] = stmt
+    for tbl in samples:
+        samples[tbl] = samples[tbl].limit(size)
     return schema, samples
 
 
@@ -201,7 +203,9 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
             # stmt.order_by
             # stmt = stmt.order_by("")
             stmt.set('order', None)
-            statements[str(tbl.alias)] = stmt.limit(size)
+            stmt.set('limit', None)
+            statements[str(tbl.alias)] =  stmt
+            # stmt.limit(size)
         # if random_order:
         #     for alias in statements:
         #         statements[alias] = statements[alias].order_by(exp.func('random', dialect= dialect))
