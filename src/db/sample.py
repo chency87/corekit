@@ -206,6 +206,8 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
             stmt.set('expressions', col)
             stmt.set('order', None)
             stmt.set('limit', None)
+            stmt.set('group', None)
+            stmt.set('having', None)
             statements[str(tbl.alias_or_name)] =  stmt
             
             # stmt.limit(size)
