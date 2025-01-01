@@ -189,7 +189,8 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
         >>> SELECT T1.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE CAST(T1.`Free Meal Count (K-12)` AS REAL) * 100 / T1.`Enrollment (K-12)` < 0.18
         >>> SELECT T2.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T2.County = 'Los Angeles' AND T2.Charter = 0
     '''
-    expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote, qualify_columns= False)
+    # expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote, qualify_columns= False)
+    expr = parse_one(str(query), dialect = dialect)
     selects = expr.find_all(exp.Select) ## main select and subqueries
     statements = {}
     table_alias = defaultdict(list)
