@@ -86,10 +86,10 @@ def test_sample_small_database( original_host_or_path, original_db,  queries: Li
 if __name__ == '__main__':
     DB_ROOT_PATH = "../Dockers/autotest/.results/bird/dev/dev_databases"
     queries = [
-        """SELECT T3.lat, T3.lng FROM results AS T1 INNER JOIN races AS T2 ON T1.raceId = T2.raceId INNER JOIN circuits AS T3 ON T2.circuitId = T3.circuitId WHERE T1.fastestLapTime = '1:29.488'""",
-        """SELECT `circuits`.`lat`, `circuits`.`lng` FROM `laptimes` INNER JOIN `races` ON `laptimes`.`raceid` = `races`.`raceid` INNER JOIN `circuits` ON `races`.`circuitid` = `circuits`.`circuitid` WHERE `laptimes`.`time` = '1:29.488'"""
+        """SELECT T2.`Free Meal Count (Ages 5-17)` / T2.`Enrollment (Ages 5-17)` AS EligibleFreeRate FROM schools AS T1 INNER JOIN frpm AS T2 ON T1.CDSCode = T2.CDSCode WHERE T1.EdOpsName = 'Continuation School' AND T2.`Enrollment (Ages 5-17)` > 0 AND T2.`Free Meal Count (Ages 5-17)` IS NOT NULL AND T2.`Enrollment (Ages 5-17)` IS NOT NULL ORDER BY EligibleFreeRate ASC LIMIT 3""",
+        """SELECT `frpm`.`cdscode`, (`frpm`.`free meal count (ages 5-17)` / `frpm`.`enrollment (ages 5-17)`) AS `eligible_free_rate` FROM `frpm` INNER JOIN `schools` ON `frpm`.`cdscode` = `schools`.`cdscode` WHERE `schools`.`soc` = 63 ORDER BY `eligible_free_rate` ASC LIMIT 3"""
     ]
-    test_sample_small_database(DB_ROOT_PATH, 'formula_1/formula_1.sqlite', queries, to_host_or_path= './tests', to_database= 'db_1017.sqlite')
+    test_sample_small_database(DB_ROOT_PATH, 'california_schools/california_schools.sqlite', queries, to_host_or_path= './tests', to_database= 'db_1.sqlite')
 
     # print(repr(parse_one("""SELECT DISTINCT t1."trans_id", t1."account_id", t1."date", t1."type", t1."operation", t1."amount", t1."balance", t1."k_symbol", t1."bank", t1."account" FROM "trans" AS "t1" INNER JOIN "account" AS "t2" ON "t1"."account_id" = "t2"."account_id" INNER JOIN "district" AS "t3" ON "t2"."district_id" = "t3"."district_id" WHERE "t1"."k_symbol" = 'SIPO' AND "t3"."a2" = 'Pisek'""", dialect = 'sqlite')))
     # test_sample_small_db(DB_ROOT_PATH, 'financial/financial.sqlite', sql, to_host_or_path= './tests', to_database= 'db_674.sqlite')

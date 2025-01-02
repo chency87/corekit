@@ -24,7 +24,8 @@ def escape_value(value):
     if value is None:
         return "NULL"
     elif isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"  # Escape single quotes
+        return str(exp.Literal.string(value))
+    # "'" + value.replace("'", "''") + "'"  # Escape single quotes
     elif isinstance(value, int):
         return int(value)
     elif isinstance(value, float):
@@ -65,9 +66,9 @@ def sample_small_database(queries: List[str], original_host_or_path, original_da
         for row in data:
             value = exp.tuple_(*row, dialect = dialect)
             expressions.append(value)
-        
-        insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = expressions))
-        inserts.append(insert_stmt.sql(dialect = dialect))
+        if expressions:
+            insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = expressions))
+            inserts.append(insert_stmt.sql(dialect = dialect))
 
     if to_host_or_path is not None and to_database is not None:
         DBManager().create_database(schemas = schema, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
@@ -176,7 +177,10 @@ def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, po
             results = conn.execute(stmt, fetch= 'all')
             for row in results:
                 row = row._asdict()
-                values = tuple([escape_value(value) for value in row.values()])
+                values =  tuple([escape_value(value) for value in row.values()])
+                # str(exp.tuple_(escape_value(value) for value in row.values()))
+                #
+                
                 datasets[table_name].append(values)
     return datasets
 
@@ -228,8 +232,8 @@ def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets
             conditions[fk.to_column].update(data)
             to_data = get_dependent_data(datasets= datasets, table_name= fk.to_table, column_name= fk.to_column, schema= schema)
             conditions[fk.to_column].update(to_data)
-            
-    where = [f"{column} in {str(tuple(condition))}" for column, condition in conditions.items() if condition]
+    
+    where = [f"{column} in {str(exp.tuple_(*condition))}" for column, condition in conditions.items() if condition]
     condition_str = " and ".join(where) if where else None
     
     return condition_str
@@ -263,7 +267,6 @@ def ensure_data_dependency(schema: MappingSchema, foreign_keys: List[ForeignKey]
         if table_name in visit:
             continue
         where = get_foreign_key_dependent_condition(foreign_keys, table_name, datasets, schema)
-
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         stmt = exp.Select(expressions = columns).from_(exp.to_identifier(table_name, quoted= quoted)).limit(size)
 
