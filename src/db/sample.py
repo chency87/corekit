@@ -1,7 +1,9 @@
 from typing import Union, List, Dict, Tuple
-from collections import defaultdict, OrderedDict
+from collections import defaultdict, OrderedDict, deque
 from sqlglot import exp, parse_one, parse
 from sqlglot.optimizer import qualify
+from datetime import date, datetime
+from dataclasses import dataclass
 from functools import reduce
 import logging
 
@@ -10,7 +12,14 @@ from .db_manage import DBManager
 logger = logging.getLogger('src.db.sample')
 
 
-from datetime import date, datetime
+@dataclass(frozen=True)
+class ForeignKey:
+    from_table: str
+    from_column: str
+    to_table: str
+    to_column: str
+    def __hash__(self):
+        return hash(self.from_table)
 def escape_value(value):
     """Escape single quotes and special characters in SQL strings."""
     if value is None:
@@ -30,16 +39,21 @@ def escape_value(value):
     
 def sample_small_db(queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
                to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
-               random_order = True, size = 10, quote = True, dialect = 'sqlite') -> Tuple[Dict, List[str]]:
+               random_order = True, size = 10, quote = True, dialect = 'sqlite', remove_table = False) -> Tuple[Dict, List[str]]:
     '''
         Sample a small instance from original database to satisfy queries.
     '''
     ddls = DBManager().get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect)
-    schema, stmts = sample_data_from_original_db(ddls, queries, random_order= random_order, dialect= dialect, size= size, quote= quote)
 
-    # print(stmts)
+    schema, foreign_keys = jsonify_ddl(ddls, dialect= dialect)
+    if remove_table:
+        schema = remove_tables(schema, queries)
+
+    schema, stmts = sample_data_from_original_db(schema, queries, random_order = random_order, dialect= dialect, size= size, quote= quote)
 
     inserts = []
+    processed = set()
+    dependent_data = defaultdict(dict)
     with DBManager().get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
         for table_name, stmt in stmts.items():
             results = conn.execute(stmt, fetch= 'all')
@@ -49,14 +63,73 @@ def sample_small_db(queries: List[str], original_host_or_path, original_database
                 values = ', '.join([str(escape_value(value)) for value in row.values()])
                 insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
                 inserts.append(insert_stmt)
+                update_foreign_key_dependency(foreign_keys, table_name, row, dependent_data)
+            processed.add(table_name)
 
-
+    for table_name, column_defs in schema.items():
+        if table_name not in processed:
+            columns = [exp.Column(this = exp.to_identifier(col, quoted= quote)) for col in column_defs]
+            select = exp.select(*columns, dialect= dialect).from_(exp.to_identifier(table_name, quoted= quote)).limit(size)
+            where = get_foreign_key_dependent_condition(foreign_keys, table_name, dependent_data)
+            if where:
+                select = select.where(where)
+            stmt = select.sql(dialect = dialect)
+            with DBManager().get_connection(original_host_or_path, original_database, original_port, original_username, original_password, dialect) as conn:
+                results = conn.execute(stmt, fetch= 'all')
+                for row in results:
+                    row = row._asdict()
+                    columns = ", ".join([f"`{k}`" for k in row.keys()])
+                    values = ', '.join([str(escape_value(value)) for value in row.values()])
+                    insert_stmt = f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});"
+                    inserts.append(insert_stmt)
+                    update_foreign_key_dependency(foreign_keys, table_name, row, dependent_data)
+            processed.add(table_name)
+            
     if to_host_or_path is not None and to_database is not None:
-        DBManager().create_database(schemas= schema, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
-    
+        DBManager().create_database(schemas = ddls, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
     return schema, stmts
 
-def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], random_order = True, size = 10, dialect = 'sqlite', quote = True) -> Tuple[Dict, Dict[str, str]]:
+def get_foreign_key_dependent_condition(foreign_keys: List, table_name, dependent_data) -> str:
+    conditions = {}
+    for fk in foreign_keys:
+        if fk.from_table == table_name:
+            if fk.from_column not in conditions:
+                conditions[fk.from_column] = set()
+            if fk.from_column in dependent_data[fk.from_table]:
+                conditions[fk.from_column].update(dependent_data[fk.from_table][fk.from_column])
+            if fk.to_table in dependent_data and fk.to_column in dependent_data[fk.to_table]:
+                conditions[fk.from_column].update(dependent_data[fk.to_table][fk.to_column])
+
+        if fk.to_table == table_name:
+            if fk.to_column not in conditions:
+                conditions[fk.to_column] = set()
+            if fk.to_column in dependent_data[fk.to_column]:
+                conditions[fk.to_column].update(dependent_data[fk.to_table][fk.to_column])
+            if fk.from_column in dependent_data[fk.from_table]:
+                conditions[fk.to_column].update(dependent_data[fk.from_table][fk.from_column])
+    where = [f"{column} in {str(tuple(condition))}" for column, condition in conditions.items() if condition]
+    condition_str = " and ".join(where) if where else None
+    
+    return condition_str
+
+def update_foreign_key_dependency(foreign_keys, table_name, row: Dict, dependent_data):
+    '''
+        Update table dependence based on query execution results. if a table connects with other tables, we should cache its execution results.
+    '''
+    for fk in foreign_keys:
+        if fk.from_table == table_name:
+            if fk.from_column not in dependent_data[fk.from_table]:
+                dependent_data[fk.from_table][fk.from_column]= []
+        if fk.to_table == table_name:
+            if fk.to_column not in dependent_data[fk.to_column]:
+                dependent_data[fk.to_table][fk.to_column] = []
+
+    if table_name in dependent_data:
+        for col in dependent_data[table_name]:
+            dependent_data[table_name][col].append(escape_value(row.get(col)))
+
+
+def sample_data_from_original_db(schema: Dict[str, Dict[str, str]], queries: Union[str, List[str]], random_order = True, size = 10, dialect = 'sqlite', quote = True) -> Tuple[Dict, Dict[str, str]]:
     '''
         Sample a small instance to satisfy queries. return a tuple <schema, Dict of sample queries>
         schema: {tbl: {col: typ}}
@@ -65,10 +138,7 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
     '''
     if not isinstance(queries, list):
         queries = [queries]
-    schema = jsonify_ddl(ddls, dialect= dialect)
-    
-    schema = remove_tables(schema, queries)
-    
+
     samples = {}
     for query in queries:
         statements = extract_predicates3(schema, query= query, size= size, random_order= random_order, quote= quote)
@@ -83,42 +153,28 @@ def sample_data_from_original_db(ddls: str, queries: Union[str, List[str]], rand
     return schema, samples
 
 
-def sample_from_original_db(ddls: str, queries: Union[str, List[str]], size = 10, dialect = 'sqlite', quote = True) -> Tuple[Dict, Dict[str, str]]:
-
-    '''
-        Sample a small instance to satisfy queries. return a tuple <schema, Dict of sample queries>
-        schema: {tbl: {col: typ}}
-        sample queries:
-        {tbl: sample_query}
-    '''
-
-    logger.warning('we should consider databasee constraints in the future')
-
-    if not isinstance(queries, list):
-        queries = [queries]
-
-    schema = jsonify_ddl(ddls, dialect= dialect)
-
-    schema = remove_table_columns(schema, queries = queries )
-
-    table_alias, table_condition, table_joins = extract_predicates(schema, queries, dialect= dialect, size= size, quote= quote)
-
-    steps = build_query(schema= schema, table_alias= table_alias, table_conditions= table_condition, table_joins = table_joins, dialect= dialect, size = size, quote = quote)
-    return schema, steps
-
-
 def jsonify_ddl(ddls, dialect = 'sqlite'):
     '''Convert SQL create statements to Dict. Return:
-        {'tbl': {'col': 'typ'} }
+        {'tbl': {'col': 'typ'} }, ForeignKeys
     '''
     schema = {}
+    foreign_keys: List[ForeignKey] = []
     for expr in parse(ddls, dialect= dialect):
-        tbl_name = expr.find(exp.Table).alias_or_name
-        columns = OrderedDict()
-        for column_def in expr.find_all(exp.ColumnDef):
-            columns[column_def.alias_or_name] = str(column_def.kind)
-        schema[tbl_name.lower()] = columns
-    return schema
+        columns = OrderedDict()        
+        obj = expr.this
+        tbl_name = obj.this.name.lower()
+        for column_def in obj.expressions:
+            if isinstance(column_def, exp.ColumnDef):
+                columns[column_def.alias_or_name] = str(column_def.kind)
+            elif isinstance(column_def, exp.ForeignKey):
+                from_tbl = column_def.args.get('reference').find(exp.Schema)
+                from_tbl_name = from_tbl.this.name.lower()
+                from_column = from_tbl.expressions[0].name
+                to_tbl_name = tbl_name
+                to_column = column_def.expressions[0].this
+                foreign_keys.append(ForeignKey(from_table= from_tbl_name, from_column = from_column, to_table= to_tbl_name, to_column= to_column))
+        schema[tbl_name] = columns
+    return schema, foreign_keys
 
 
 def remove_tables(schema: Dict[str, Dict[str, str]], queries: List[str], dialect = 'sqlite'):
@@ -209,11 +265,6 @@ def extract_predicates3(schema: Dict[str, Dict[str, str]], query: str, dialect =
             stmt.set('group', None)
             stmt.set('having', None)
             statements[str(tbl.alias_or_name)] =  stmt
-            
-            # stmt.limit(size)
-        # if random_order:
-        #     for alias in statements:
-        #         statements[alias] = statements[alias].order_by(exp.func('random', dialect= dialect))
     
     return merge_samples_by_table(table_alias, statements)
 
@@ -396,3 +447,72 @@ def build_query(schema, table_alias: Dict[str, List[str]], table_conditions: Dic
         body.set('with', exp.With(expressions = ctes))
         queries[table_name] = body.sql(dialect= dialect)
     return queries
+
+
+
+
+def jsonify_ddl2(ddls, dialect = 'sqlite'):
+    '''Convert SQL create statements to Dict. Return:
+        {'tbl': {'col': 'typ'} }
+    '''
+
+    dependency = defaultdict(list)
+
+    fks = []
+    
+    out_degree = defaultdict(int)
+
+    schema = {}
+    for expr in parse(ddls, dialect= dialect):
+        columns = OrderedDict()
+        
+        obj = expr.this
+        tbl_name = obj.this.name.lower()
+        out_degree[tbl_name] = out_degree.get(tbl_name, 0)
+        for column_def in obj.expressions:
+            if isinstance(column_def, exp.ColumnDef):
+                columns[column_def.alias_or_name] = str(column_def.kind)
+            elif isinstance(column_def, exp.ForeignKey):
+                from_tbl = column_def.args.get('reference').find(exp.Schema)
+                from_tbl_name = from_tbl.this.name.lower()
+                from_column = from_tbl.expressions[0].name
+                to_tbl_name = tbl_name
+                to_column = column_def.expressions[0].this
+                fks.append(ForeignKey(from_table= from_tbl_name, from_column = from_column, to_table= to_tbl_name, to_column= to_column))
+                out_degree[from_tbl_name] += 1
+        schema[tbl_name.lower()] = columns
+    
+    # print(out_degree)
+    # queue = deque([table for table in out_degree if out_degree[table] == 0])
+
+    # sorted_tables = []
+
+    # while queue:
+    #     table = queue.popleft()
+    #     sorted_tables.append(table)
+
+    #     for fk in fks:
+    #         if out_degree[fk.from_table] == 0:
+    #             queue.append(fk.from_table)
+    #         if fk.from_table == table:
+    #             out_degree[fk.from_table] -= 1
+
+    return schema
+
+# def topo_tables(ddls: str):
+#     '''
+#     topo sort schema and extract dependency
+#     '''
+#     visited = {k: False for k in self._tables.keys()}
+#     q = deque([table_name for table_name in list(self._tables.keys() ) if table_name not in list(self.foreign_keys.keys()) or not self.foreign_keys.get(table_name, [])])
+#     topo_order = []
+#     while q:
+#         table_name = q.popleft()
+#         topo_order.append(table_name)
+#         visited[table_name] = True
+#         for tbl_name, fks in self.foreign_keys.items():
+#             if visited[tbl_name]:
+#                 continue
+#             if all([fk.args.get('reference').find(exp.Table).name == tbl_name or visited[fk.args.get('reference').find(exp.Table).name] for fk in fks ]):
+#                 if tbl_name not in q: q.append(tbl_name)        
+#     return [self._tables[tbl_name] for tbl_name in topo_order]

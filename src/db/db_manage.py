@@ -13,7 +13,8 @@ from typing import List, Tuple, Any, Dict, Union, Literal
 from collections import defaultdict
 from .. import singletonMeta
 import random, logging, os
-from sqlglot import parse_one, exp
+from sqlglot import parse_one, exp, parse
+from sqlglot.schema import MappingSchema
 # from .sample import sample_from_original_db
 
 logger = logging.getLogger(f'src.db_manager')
@@ -178,10 +179,13 @@ class DBManager(metaclass = singletonMeta):
                     records[table_name] = [dict(row) for row in result]
         return records
 
-    def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]]], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
+    def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]], str], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
         '''
             Create a database instance on target host_or_path.
         '''
+        if isinstance(schemas, MappingSchema):
+            schemas = schemas.mapping
+            
         ddls = []
         if isinstance(schemas, list):
             ddls.extend(schemas)
@@ -193,8 +197,13 @@ class DBManager(metaclass = singletonMeta):
                 columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
                 ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
                 ddls.append(ddl.sql(dialect= dialect))
+        
         else:
-            raise ValueError(f'cannot parse schema {schemas}')
+            try:
+                for ddl in parse(schemas, read = dialect):
+                    ddls.append(ddl.sql(dialect= dialect))
+            except Exception as e:
+                raise ValueError(f'cannot parse schema {schemas}. {e}')
         
         with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
             conn.create_tables(*ddls)
