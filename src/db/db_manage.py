@@ -109,6 +109,7 @@ class DBManager(metaclass = singletonMeta):
         schema = []
         for table_name, table in metadata.tables.items():
             ddl = str(CreateTable(table).compile(engine))
+            ddl = ddl.replace('watermark', '"watermark"')
             schema.append(ddl)
         return ';\n'.join(schema)
         
