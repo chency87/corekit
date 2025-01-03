@@ -78,7 +78,7 @@ def test_sample2(db_root_path, database, sql):
 
 def test_sample_small_database( original_host_or_path, original_db,  queries: List[str], to_host_or_path, to_database ):
     r = sample_small_database(queries= queries, original_host_or_path= original_host_or_path, original_database= original_db, \
-                              to_host_or_path= to_host_or_path, to_database= to_database, random_order= False)
+                              to_host_or_path= to_host_or_path, to_database= to_database, random_order= False, remove_table= True)
     # print(r)
 
 
@@ -86,10 +86,10 @@ def test_sample_small_database( original_host_or_path, original_db,  queries: Li
 if __name__ == '__main__':
     DB_ROOT_PATH = "../Dockers/autotest/.results/bird/dev/dev_databases"
     queries = [
-        """SELECT T2.NumTstTakr FROM frpm AS T1 INNER JOIN satscores AS T2 ON T1.CDSCode = T2.cds WHERE T1.`FRPM Count (K-12)` = (SELECT MAX(`FRPM Count (K-12)`) FROM frpm)""",
-        """SELECT SUM(`satscores`.`numtsttakr`) FROM `satscores` INNER JOIN `frpm` ON `satscores`.`cds` = `frpm`.`cdscode` ORDER BY `frpm`.`frpm count (k-12)` DESC LIMIT 1"""
+        """SELECT T2.format, T1.name FROM cards AS T1 INNER JOIN legalities AS T2 ON T1.uuid = T2.uuid WHERE T2.status = 'Banned' GROUP BY T2.format ORDER BY COUNT(T2.status) DESC LIMIT 1""",
+        """SELECT `legalities`.`format`, `cards`.`name` FROM `legalities` INNER JOIN `cards` ON `legalities`.`uuid` = `cards`.`uuid` WHERE `legalities`.`status` = 'Banned' AND `legalities`.`format` = (SELECT `format` FROM `legalities` WHERE `status` = 'Banned' GROUP BY `format` ORDER BY COUNT(`status`) DESC LIMIT 1)"""
     ]
-    test_sample_small_database(DB_ROOT_PATH, 'california_schools/california_schools.sqlite', queries, to_host_or_path= './tests', to_database= 'db_8.sqlite')
+    test_sample_small_database(DB_ROOT_PATH, 'card_games/card_games.sqlite', queries, to_host_or_path= './tests', to_database= 'db_518.sqlite')
 
     # print(repr(parse_one("""SELECT DISTINCT t1."trans_id", t1."account_id", t1."date", t1."type", t1."operation", t1."amount", t1."balance", t1."k_symbol", t1."bank", t1."account" FROM "trans" AS "t1" INNER JOIN "account" AS "t2" ON "t1"."account_id" = "t2"."account_id" INNER JOIN "district" AS "t3" ON "t2"."district_id" = "t3"."district_id" WHERE "t1"."k_symbol" = 'SIPO' AND "t3"."a2" = 'Pisek'""", dialect = 'sqlite')))
     # test_sample_small_db(DB_ROOT_PATH, 'financial/financial.sqlite', sql, to_host_or_path= './tests', to_database= 'db_674.sqlite')
