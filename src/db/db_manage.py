@@ -9,7 +9,7 @@ else:
     from sqlalchemy import create_engine, text, Connection, MetaData, Engine, URL
 
 from threading import Lock
-from typing import List, Tuple, Any, Dict, Union, Literal
+from typing import List, Tuple, Any, Dict, Union, Literal, overload
 from collections import defaultdict
 from .. import singletonMeta
 import random, logging, os
@@ -57,8 +57,15 @@ class Connect:
         '''
             INSERT data into tables accordingly. 
         '''
-        self.execute(stmt, fetch= None, commit= True, parameters= data)
+        self.conn.execute(text(stmt), parameters = data)
+        self.conn.commit()
     
+    
+    def insert_data(self, table: str, data: List[Dict[str, Any]]):
+
+        
+        ...
+
 class DBManager(metaclass = singletonMeta):
     '''
         Maintain a connection pool to connect to various databases. Use as 
@@ -104,6 +111,18 @@ class DBManager(metaclass = singletonMeta):
         conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
         engine = self._assert_engine(conn_str, pool_size, max_overflow, pool_timeout, pool_recycle, **kwargs)
         return Connect(connection= engine.connect())
+
+    def drop_schema(self,host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> bool:
+        '''
+            Drop all tables
+        '''
+        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
+        engine = self._assert_engine(conn_str)
+        metadata = MetaData()
+        metadata.reflect(bind = engine)
+        metadata.drop_all(bind= engine)
+        
+        
 
     def get_schema(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> str:
         '''

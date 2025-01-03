@@ -1,4 +1,4 @@
-from typing import Union, List, Dict, Tuple, Set, Optional
+from typing import Union, List, Dict, Tuple, Set, Optional, overload
 from collections import defaultdict, OrderedDict, deque
 from sqlglot import exp, parse_one, parse
 from sqlglot.schema import ensure_schema, MappingSchema
@@ -19,26 +19,25 @@ class ForeignKey:
     from_column: str
     to_table: str
     to_column: str
-# def escape_value(value):
-#     """Escape single quotes and special characters in SQL strings."""
-#     if value is None:
-#         return "NULL"
-#     elif isinstance(value, str):
-#         return str(exp.Literal.string(value))
-#     # "'" + value.replace("'", "''") + "'"  # Escape single quotes
-#     elif isinstance(value, int):
-#         return int(value)
-#     elif isinstance(value, float):
-#         return float(value)
-#     elif isinstance(value, date):
-#         return escape_value(value.strftime('%Y-%m%d'))
-#     elif isinstance(value, datetime):
-#         return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
-#     else:
-#         return value  # Use repr for other types
+def escape_value(value):
+    """Escape single quotes and special characters in SQL strings."""
+    if value is None:
+        return "NULL"
+    elif isinstance(value, str):
+        return value.replace(':', '\:')   # Escape single quotes
+    elif isinstance(value, int):
+        return int(value)
+    elif isinstance(value, float):
+        return float(value)
+    elif isinstance(value, date):
+        return escape_value(value.strftime('%Y-%m%d'))
+    elif isinstance(value, datetime):
+        return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
+    else:
+        return value  # Use repr for other types
 def sample_small_database(queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
                to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
-               random_order = False, size = 10, quoted = True, dialect = 'sqlite', remove_table = False):
+               random_order = False, size = 10, quoted = True, dialect = 'sqlite', remove_table = False, max_row_size = False):
     
     ddls = DBManager().get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect)
     schema, primary_keys, foreign_keys = unify_schema(ddls, dialect= dialect)
@@ -46,35 +45,23 @@ def sample_small_database(queries: List[str], original_host_or_path, original_da
         schema, primary_keys = remove_tables(schema, primary_keys= primary_keys, queries= queries, dialect= dialect)
 
     sampled_stmts = sample_data_by_queries(schema= schema, queries= queries, random_order= random_order, size= size, dialect= dialect, quote= quoted)
+
+    # print(sampled_stmts)
+
     sample = get_sampled_data(sampled_stmts, original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect )
     ## ensure row size 
-    stmts = ensure_row_size(schema, primary_keys, sample, size = size, quoted = quoted, dialect= dialect)
-    if stmts:
-        append_data = get_sampled_data(stmts, original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect)
-        for table_name, data in append_data.items():
-            sample[table_name].extend(data)
+    if max_row_size:
+        stmts = ensure_row_size(schema, primary_keys, sample, size = size, quoted = quoted, dialect= dialect)
+        if stmts:
+            append_data = get_sampled_data(stmts, original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect)
+            for table_name, data in append_data.items():
+                sample[table_name].extend(data)
     
     sample = ensure_data_dependency(schema, foreign_keys= foreign_keys, datasets= sample, size = size, host_or_path= original_host_or_path, database= original_database,\
                                     port = original_port, username= original_username, password= original_password, quoted= quoted, dialect= dialect)
     
     ## convert dataframe to SQL insert statements
     inserts = unify_insert_stmt(schema= schema, foreign_keys= foreign_keys, datasets= sample, quoted= quoted, dialect= dialect)
-
-    # print(inserts)
-    # inserts = []
-    # for table_name in topo_tables(schema, foreign_keys):
-    #     data = sample.get(table_name, [])
-    #     columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
-    #     table_identifier = exp.to_identifier(table_name, quoted= quoted)
-        
-    #     expressions = []
-
-    #     for row in data:
-    #         value = exp.tuple_(*row, dialect = dialect)
-    #         expressions.append(value)
-    #     if expressions:
-    #         insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = expressions))
-    #         inserts.append(insert_stmt.sql(dialect = dialect))
 
     if to_host_or_path is not None and to_database is not None:
         create_table_stmts = []
@@ -93,19 +80,16 @@ def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], dat
         data = datasets.get(table_name, [])
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         table_identifier = exp.to_identifier(table_name, quoted= quoted)
-        placeholders = [exp.Placeholder(this = col) for col in schema.column_names(table_name)]
-        insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = [exp.tuple_(*placeholders, dialect = dialect)]))
-        # print(str(placeholders))
-        print(insert_stmt.sql(dialect= dialect))
+        # placeholders = [exp.Placeholder(this = str(col)) for col in schema.column_names(table_name)]
+
         if data:
-            # print(data)
-            # values = []
-            # for row in data:
-            #     value = tuple(exp.maybe_parse(row[col]).sql(dialect = dialect) for col in schema.column_names(table_name))
-            #     values.append(value)
+            values = []
+            for row in data:
+                values.append(exp.tuple_(*(exp.convert(escape_value(row[col])) for col in schema.column_names(table_name))))
+
+            insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = values))
             
-                # print(f"{table_name} -- : {values}")
-            inserts.append((insert_stmt.sql(dialect = dialect), data))
+            inserts.append((insert_stmt.sql(dialect = dialect), None))
     return inserts
 
 
@@ -194,6 +178,22 @@ def sample_data_by_queries(schema: MappingSchema, queries: Union[str, List[str]]
         samples[table_name] = samples[table_name].sql(dialect = dialect)
     return samples
 
+
+def union_statements(left: Dict, right: Dict, dialect):
+
+    statements = {}
+    for table_name, stmt in left.items():
+        tmp = stmt
+        if table_name in right:
+            tmp = exp.union(tmp, right.pop(table_name), dialect= dialect)
+        statements[table_name] = tmp        
+    for table_name, stmt in right.items():
+        statements[table_name] = stmt
+
+    return statements
+
+
+
 def process_query(schema: MappingSchema, expression: exp.Expression, dialect: str, quoted: bool,\
                   ctes: Optional[Dict[str, exp.Expression]] = None) -> Dict[str, exp.Select]:
     statements = {}
@@ -208,31 +208,45 @@ def process_query(schema: MappingSchema, expression: exp.Expression, dialect: st
     if isinstance(expression, exp.Select):
         table_names = set()
         from_ = expression.args.get('from')
-        table_names.add(from_.this)
-        joins = expression.args.get("joins")
-        if joins:
-            for join in joins:
-                for tbl in join.find_all(exp.Table):
-                    table_names.add(tbl)
-        for tbl in table_names:
-            tbl_name = tbl.name.lower()
-            stmt = expression.copy()
-            columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = exp.to_identifier(tbl.alias_or_name, quoted= quoted)) for col in schema.column_names(tbl_name, dialect= dialect)]
-            stmt.set('expressions', columns)
-            for keyword in ['distinct', 'order', 'offset', 'limit', 'group', 'having']:
-                stmt.set(keyword, None)
-            statements[tbl_name] =  stmt
+        if not from_:
+            for expr in expression.args.get('expressions'):
+                for subquery in expr.find_all(exp.Select):
+                    tmp = process_query(schema= schema, expression= subquery, dialect= dialect, quoted= quoted, ctes= ctes)
+                    statements = union_statements(statements, tmp, dialect= dialect)
+
+        elif isinstance(from_.this, exp.Subquery):
+            tmp = process_query(schema= schema, expression= from_.this, dialect= dialect, quoted= quoted, ctes= ctes)
+            statements = union_statements(statements, tmp, dialect= dialect)
+        else:
+            table_names.add(from_.this)
+            joins = expression.args.get("joins")
+            if joins:
+                for join in joins:
+                    if isinstance(join.this, exp.Subquery):
+                        tmp = process_query(schema= schema, expression= join.this, dialect= dialect, quoted= quoted, ctes= ctes)
+                        statements = union_statements(statements, tmp, dialect= dialect)
+                    else:
+                        for tbl in join.find_all(exp.Table):
+                            table_names.add(tbl)
+            for tbl in table_names:
+                tbl_name = tbl.name.lower()
+                stmt = expression.copy()
+                columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = exp.to_identifier(tbl.alias_or_name, quoted= quoted)) for col in schema.column_names(tbl_name)]
+                stmt.set('expressions', columns)
+                for keyword in ['distinct', 'order', 'offset', 'limit', 'group', 'having']:
+                    stmt.set(keyword, None)
+                if tbl_name in statements:
+                    statements[tbl_name] =  exp.union(statements[tbl_name], stmt)
+                else:
+                    statements[tbl_name] =  stmt
+                    
     elif isinstance(expression, exp.Union):
         left = process_query(schema= schema, expression= expression.left, dialect= dialect, quoted= quoted, ctes= ctes)
-        right = process_query(schema= schema, expression= expression.right, dialect= dialect, quoted= quoted, ctes= ctes)
-        
-        for table_name, stmt in left.items():
-            tmp = stmt
-            if table_name in right:
-                tmp = exp.union(tmp, right.pop(table_name), dialect= dialect)
-            statements[table_name] = tmp        
-        for table_name, stmt in right.items():
-            statements[table_name] = stmt
+        right = process_query(schema= schema, expression= expression.right, dialect= dialect, quoted= quoted, ctes= ctes)        
+        statements = union_statements(statements,  union_statements(left, right=right, dialect= dialect), dialect= dialect)
+    elif isinstance(expression, exp.Subquery):
+        tmp = process_query(schema= schema, expression= expression.this, dialect= dialect, quoted= quoted, ctes= ctes)
+        statements = union_statements(statements, tmp, dialect= dialect)
     else:
         raise ValueError(f'Unsupported expression: {expression}')
     
@@ -270,14 +284,18 @@ def ensure_row_size(schema: MappingSchema, primary_keys, datasets, size, quoted 
         for pk, values in pk_values.items():
             if not values:
                 continue
-            where.append(f'{pk} not in {str(tuple(values))}')
+            
+            where.append(exp.Not(this = exp.In(this = exp.to_column(pk, quoted= quoted), expressions = [exp.convert(c) for c in values])))
+        
         if where:
-            stmt = stmt.where(' and '.join(where))
+            where = reduce(lambda x, y : exp.And(this = x, expression =y), where)
+            stmt = stmt.where(where)
+        
         stmts[table_name] = stmt.sql(dialect = dialect)
     return stmts
 
 
-def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets: Dict[str, List], schema: MappingSchema) -> str:
+def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets: Dict[str, List], schema: MappingSchema) -> exp.Condition:
     conditions = {}
     for fk in foreign_keys:
         if fk.from_table == table_name:
@@ -297,10 +315,20 @@ def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets
             to_data = get_dependent_data(datasets= datasets, table_name= fk.to_table, column_name= fk.to_column, schema= schema)
             conditions[fk.to_column].update(to_data)
     
-    where = [f"{column} in {str(exp.tuple_(*condition))}" for column, condition in conditions.items() if condition]
-    condition_str = " and ".join(where) if where else None
+    # where = [f"{column} in {exp.tuple_(*(exp.convert(c) for c in condition)).sql()}" for column, condition in conditions.items() if condition]
+
+    # for column, dep_data in conditions.items():
+    #     if dep_data:
+    #         exp.In(this = exp.to_column(column, quoted= True), expressions = [exp.convert(c) for c in dep_data])
+
+    where = [exp.In(this = exp.to_column(column, quoted= True), expressions = [exp.convert(c) for c in dep_data]) for column, dep_data in conditions.items() if dep_data]
+    condition = None
+    if where:
+        condition = reduce(lambda x, y : exp.And(this = x, expression =y), where)
+
+    # condition_str = " and ".join(where) if where else None
     
-    return condition_str
+    return condition
 
 
 def get_dependent_data(datasets: Dict[str, List], table_name, column_name, schema: MappingSchema):
@@ -315,21 +343,19 @@ def topo_tables(schema: MappingSchema, foreign_keys: List[ForeignKey]):
     for fk in foreign_keys:
         if fk.from_table in out_degree:
             out_degree[fk.from_table] += 1
-
     sorted_table = dict(sorted(out_degree.items(), key=lambda item: item[1], reverse=True))
-
     return sorted_table
 
 def ensure_data_dependency(schema: MappingSchema, foreign_keys: List[ForeignKey], datasets: Dict[str, List], size, \
                            host_or_path: str, database: str, port = None, username = None, password = None,
                            quoted = True, dialect = 'sqlite'):
-    
     sorted_table = topo_tables(schema, foreign_keys)
 
     visit = set(datasets.keys())
     for table_name in sorted_table:
         if table_name in visit or table_name.lower() not in schema.mapping:
             continue
+        
         where = get_foreign_key_dependent_condition(foreign_keys, table_name, datasets, schema)
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         stmt = exp.Select(expressions = columns).from_(exp.to_identifier(table_name, quoted= quoted)).limit(size)
@@ -337,8 +363,8 @@ def ensure_data_dependency(schema: MappingSchema, foreign_keys: List[ForeignKey]
         if where:
             stmt = stmt.where(where)
         stmt = stmt.sql(dialect= dialect)
+        
         data = get_sampled_data({table_name: stmt}, host_or_path, database= database, port= port, username= username, password= password, dialect= dialect)
-
         for k, v in data.items():
             datasets[k] = v
         visit.add(table_name)
