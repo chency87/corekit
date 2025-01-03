@@ -152,7 +152,7 @@ def process_query(schema: MappingSchema, expression: exp.Expression, dialect: st
             stmt = expression.copy()
             columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = tbl.alias) for col in schema.column_names(tbl_name, dialect= dialect)]
             stmt.set('expressions', columns)
-            for keyword in ['distinct', 'order', 'limit', 'group', 'having']:
+            for keyword in ['distinct', 'order', 'offset', 'limit', 'group', 'having']:
                 stmt.set(keyword, None)
             statements[tbl_name] =  stmt
     elif isinstance(expression, exp.Union):
