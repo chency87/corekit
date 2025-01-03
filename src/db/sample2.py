@@ -157,7 +157,6 @@ def process_query(schema: MappingSchema, expression: exp.Expression, dialect: st
                     table_names.add(tbl.name.lower())
         for tbl_name in table_names:
         # for tbl in expression.find_all(exp.Table):
-            tbl_name = tbl.name.lower()
             stmt = expression.copy()
             columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = tbl.alias) for col in schema.column_names(tbl_name, dialect= dialect)]
             stmt.set('expressions', columns)
