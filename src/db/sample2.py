@@ -94,8 +94,6 @@ def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], dat
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         table_identifier = exp.to_identifier(table_name, quoted= quoted)
         placeholders = [exp.Placeholder(this = col) for col in schema.column_names(table_name)]
-        # placeholders = [exp.Placeholder(this = "?") for _ in columns]
-        # placeholders = ['?' for _ in columns]
         insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = [exp.tuple_(*placeholders, dialect = dialect)]))
         
         if data:
