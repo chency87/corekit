@@ -19,23 +19,23 @@ class ForeignKey:
     from_column: str
     to_table: str
     to_column: str
-def escape_value(value):
-    """Escape single quotes and special characters in SQL strings."""
-    if value is None:
-        return "NULL"
-    elif isinstance(value, str):
-        return str(exp.Literal.string(value))
-    # "'" + value.replace("'", "''") + "'"  # Escape single quotes
-    elif isinstance(value, int):
-        return int(value)
-    elif isinstance(value, float):
-        return float(value)
-    elif isinstance(value, date):
-        return escape_value(value.strftime('%Y-%m%d'))
-    elif isinstance(value, datetime):
-        return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
-    else:
-        return value  # Use repr for other types
+# def escape_value(value):
+#     """Escape single quotes and special characters in SQL strings."""
+#     if value is None:
+#         return "NULL"
+#     elif isinstance(value, str):
+#         return str(exp.Literal.string(value))
+#     # "'" + value.replace("'", "''") + "'"  # Escape single quotes
+#     elif isinstance(value, int):
+#         return int(value)
+#     elif isinstance(value, float):
+#         return float(value)
+#     elif isinstance(value, date):
+#         return escape_value(value.strftime('%Y-%m%d'))
+#     elif isinstance(value, datetime):
+#         return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
+#     else:
+#         return value  # Use repr for other types
 def sample_small_database(queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
                to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
                random_order = False, size = 10, quoted = True, dialect = 'sqlite', remove_table = False):
@@ -86,8 +86,6 @@ def sample_small_database(queries: List[str], original_host_or_path, original_da
             conn.create_tables(*create_table_stmts)
             for insert_stmt, data in inserts:
                 conn.insert(insert_stmt, data)
-    #     DBManager().create_database(schemas = schema, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
-
 
 def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], datasets, quoted, dialect):
     inserts = []
@@ -95,21 +93,21 @@ def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], dat
         data = datasets.get(table_name, [])
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         table_identifier = exp.to_identifier(table_name, quoted= quoted)
-        placeholders = [exp.Placeholder(this = "?") for _ in columns]
-        placeholders = ['?' for _ in columns]
+        placeholders = [exp.Placeholder(this = col) for col in schema.column_names(table_name)]
+        # placeholders = [exp.Placeholder(this = "?") for _ in columns]
+        # placeholders = ['?' for _ in columns]
         insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = [exp.tuple_(*placeholders, dialect = dialect)]))
         
         if data:
-            values = []
-            for row in data:
-                value = tuple(exp.maybe_parse(row[col]).sql(dialect = dialect) for col in schema.column_names(table_name))
-                values.append(value)
-            print(f"{table_name} -- : {values}")
-            if values and values[0]:
-                inserts.append((insert_stmt.sql(dialect = dialect), values))
+            # print(data)
+            # values = []
+            # for row in data:
+            #     value = tuple(exp.maybe_parse(row[col]).sql(dialect = dialect) for col in schema.column_names(table_name))
+            #     values.append(value)
+            
+                # print(f"{table_name} -- : {values}")
+            inserts.append((insert_stmt.sql(dialect = dialect), data))
     return inserts
-
-
 
 
 def unify_schema(ddls: str, dialect) -> Tuple[MappingSchema, Dict[str, Set], List[ForeignKey]]:
@@ -248,7 +246,7 @@ def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, po
             results = conn.execute(stmt, fetch= 'all')
             for row in results:
                 row = row._asdict()
-                values = {name.lower(): escape_value(value) for name, value in row.items()}
+                values = {name.lower(): value for name, value in row.items()}
                 datasets[table_name].append(values)
     return datasets
 

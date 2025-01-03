@@ -29,7 +29,7 @@ class Connect:
     def close(self):
         self.conn.close()
     def execute(self, stmt, fetch: Union[str, int] = 'all', commit = False, parameters = None):
-        r = self.conn.execute(text(stmt), parameters)
+        r = self.conn.execute(text(stmt), parameters = parameters)
         results_sizes = {
             'all' : lambda cur: cur.fetchall(),
             'one':  lambda cur: cur.fetchone(),
@@ -57,7 +57,7 @@ class Connect:
         '''
             INSERT data into tables accordingly. 
         '''
-        self.execute(stmt= stmt, fetch= None, commit= True, parameters= data)
+        self.execute(stmt, fetch= None, commit= True, parameters= data)
     
 class DBManager(metaclass = singletonMeta):
     '''
