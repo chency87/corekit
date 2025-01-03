@@ -91,6 +91,10 @@ if __name__ == '__main__':
     ]
     test_sample_small_database(DB_ROOT_PATH, 'card_games/card_games.sqlite', queries, to_host_or_path= './tests', to_database= 'db_518.sqlite')
 
+    # print(repr(parse_one("INSERT INTO users (name, age) VALUES (:name, :age)")))
+
+
+
     # print(repr(parse_one("""SELECT DISTINCT t1."trans_id", t1."account_id", t1."date", t1."type", t1."operation", t1."amount", t1."balance", t1."k_symbol", t1."bank", t1."account" FROM "trans" AS "t1" INNER JOIN "account" AS "t2" ON "t1"."account_id" = "t2"."account_id" INNER JOIN "district" AS "t3" ON "t2"."district_id" = "t3"."district_id" WHERE "t1"."k_symbol" = 'SIPO' AND "t3"."a2" = 'Pisek'""", dialect = 'sqlite')))
     # test_sample_small_db(DB_ROOT_PATH, 'financial/financial.sqlite', sql, to_host_or_path= './tests', to_database= 'db_674.sqlite')
 

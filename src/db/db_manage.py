@@ -28,8 +28,8 @@ class Connect:
         self.close()
     def close(self):
         self.conn.close()
-    def execute(self, stmt, fetch: Union[str, int] = 'all', commit = False):
-        r = self.conn.execute(text(stmt))
+    def execute(self, stmt, fetch: Union[str, int] = 'all', commit = False, parameters = None):
+        r = self.conn.execute(text(stmt), parameters)
         results_sizes = {
             'all' : lambda cur: cur.fetchall(),
             'one':  lambda cur: cur.fetchone(),
@@ -52,6 +52,12 @@ class Connect:
 
     def drop_table(self, table_name):
         self.execute(f"DROP TABLE IF EXISTS {table_name}", fetch= None)
+    
+    def insert(self, stmt: str, data: List[Dict[str, Any]]):
+        '''
+            INSERT data into tables accordingly. 
+        '''
+        self.execute(stmt= stmt, fetch= None, commit= True, parameters= data)
     
 class DBManager(metaclass = singletonMeta):
     '''
@@ -210,7 +216,30 @@ class DBManager(metaclass = singletonMeta):
             for insert_stmt in inserts:
                 conn.execute(insert_stmt, fetch= None, commit= True)
 
-    
+    def create_schema(self, schemas: Union[List[str], Dict[str, Dict[str, str]], str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
+        if isinstance(schemas, MappingSchema):
+            schemas = schemas.mapping
+        ddls = []
+        if isinstance(schemas, list):
+            ddls.extend(schemas)
+        elif isinstance(schemas, dict):
+            '''
+            we should convert Dict schema to ddl firs
+            '''
+            for table_name, column_defs in schemas.items():
+                columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
+                ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
+                ddls.append(ddl.sql(dialect= dialect))
+        else:
+            try:
+                for ddl in parse(schemas, read = dialect):
+                    ddls.append(ddl.sql(dialect= dialect))
+            except Exception as e:
+                raise ValueError(f'cannot parse schema {schemas}. {e}')
+
+        with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
+            conn.create_tables(*ddls)
+
 
     # def sample(self, queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
     #            to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \

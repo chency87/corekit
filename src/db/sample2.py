@@ -58,23 +58,59 @@ def sample_small_database(queries: List[str], original_host_or_path, original_da
                                     port = original_port, username= original_username, password= original_password, quoted= quoted, dialect= dialect)
     
     ## convert dataframe to SQL insert statements
-    inserts = []
-    for table_name in topo_tables(schema, foreign_keys):
-        data = sample.get(table_name, [])
-        columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
-        table_identifier = exp.to_identifier(table_name, quoted= quoted)
-        
-        expressions = []
+    inserts = unify_insert_stmt(schema= schema, foreign_keys= foreign_keys, datasets= sample, quoted= quoted, dialect= dialect)
 
-        for row in data:
-            value = exp.tuple_(*row, dialect = dialect)
-            expressions.append(value)
-        if expressions:
-            insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = expressions))
-            inserts.append(insert_stmt.sql(dialect = dialect))
+    # print(inserts)
+    # inserts = []
+    # for table_name in topo_tables(schema, foreign_keys):
+    #     data = sample.get(table_name, [])
+    #     columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
+    #     table_identifier = exp.to_identifier(table_name, quoted= quoted)
+        
+    #     expressions = []
+
+    #     for row in data:
+    #         value = exp.tuple_(*row, dialect = dialect)
+    #         expressions.append(value)
+    #     if expressions:
+    #         insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = expressions))
+    #         inserts.append(insert_stmt.sql(dialect = dialect))
 
     if to_host_or_path is not None and to_database is not None:
-        DBManager().create_database(schemas = schema, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
+        create_table_stmts = []
+        for table_name, column_defs in schema.mapping.items():
+            columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
+            ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
+            create_table_stmts.append(ddl.sql(dialect= dialect))
+        with DBManager().get_connection(host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect) as conn:
+            conn.create_tables(*create_table_stmts)
+            for insert_stmt, data in inserts:
+                conn.insert(insert_stmt, data)
+    #     DBManager().create_database(schemas = schema, inserts= inserts,  host_or_path= to_host_or_path, database = to_database, port = to_port, username = to_username, password= to_password, dialect= dialect)
+
+
+def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], datasets, quoted, dialect):
+    inserts = []
+    for table_name in topo_tables(schema, foreign_keys):
+        data = datasets.get(table_name, [])
+        columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
+        table_identifier = exp.to_identifier(table_name, quoted= quoted)
+        placeholders = [exp.Placeholder(this = "?") for _ in columns]
+        placeholders = ['?' for _ in columns]
+        insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = [exp.tuple_(*placeholders, dialect = dialect)]))
+        
+        if data:
+            values = []
+            for row in data:
+                value = tuple(exp.maybe_parse(row[col]).sql(dialect = dialect) for col in schema.column_names(table_name))
+                values.append(value)
+            print(f"{table_name} -- : {values}")
+            if values and values[0]:
+                inserts.append((insert_stmt.sql(dialect = dialect), values))
+    return inserts
+
+
+
 
 def unify_schema(ddls: str, dialect) -> Tuple[MappingSchema, Dict[str, Set], List[ForeignKey]]:
 
@@ -212,10 +248,7 @@ def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, po
             results = conn.execute(stmt, fetch= 'all')
             for row in results:
                 row = row._asdict()
-                values =  tuple([escape_value(value) for value in row.values()])
-                # str(exp.tuple_(escape_value(value) for value in row.values()))
-                #
-                
+                values = {name.lower(): escape_value(value) for name, value in row.items()}
                 datasets[table_name].append(values)
     return datasets
 
@@ -233,8 +266,7 @@ def ensure_row_size(schema: MappingSchema, primary_keys, datasets, size, quoted 
         pk_values = {}
         column_names = schema.column_names(table_name)
         for pk in primary_keys[table_name]:
-            index = column_names.index(pk)
-            pk_values[pk] = [row[index] for row in data]
+            pk_values[pk] = [row[pk] for row in data]
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in column_names]
         stmt = exp.Select(expressions = columns).from_(exp.to_identifier(table_name, quoted= quoted)).limit(size - len(data))
         where = []
@@ -275,10 +307,9 @@ def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets
 
 
 def get_dependent_data(datasets: Dict[str, List], table_name, column_name, schema: MappingSchema):
-    columns = schema.column_names(table_name)
     data = []
     for row in datasets.get(table_name, []):
-        data.append(row[columns.index(column_name)])
+        data.append(row[column_name])
     return data
 
 def topo_tables(schema: MappingSchema, foreign_keys: List[ForeignKey]):
