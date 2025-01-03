@@ -147,7 +147,16 @@ def process_query(schema: MappingSchema, expression: exp.Expression, dialect: st
             ctes[cte.alias] = cte.this
     
     if isinstance(expression, exp.Select):
-        for tbl in expression.find_all(exp.Table):
+        table_names = set()
+        from_ = expression.args.get('from')
+        table_names.add(from_.this.name.lower())
+        joins = expression.args.get("joins")
+        if joins:
+            for join in joins:
+                for tbl in join.find_all(exp.Table):
+                    table_names.add(tbl.name.lower())
+        for tbl_name in table_names:
+        # for tbl in expression.find_all(exp.Table):
             tbl_name = tbl.name.lower()
             stmt = expression.copy()
             columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = tbl.alias) for col in schema.column_names(tbl_name, dialect= dialect)]
