@@ -1,4 +1,4 @@
-from typing import Union, List, Dict, Tuple, Set
+from typing import Union, List, Dict, Tuple, Set, Optional
 from collections import defaultdict, OrderedDict, deque
 from sqlglot import exp, parse_one, parse
 from sqlglot.schema import ensure_schema, MappingSchema
@@ -38,28 +38,28 @@ def escape_value(value):
         return value  # Use repr for other types
 def sample_small_database(queries: List[str], original_host_or_path, original_database, original_port= None, original_username= None, original_password= None,\
                to_host_or_path = None, to_database = None, to_port = None, to_username = None, to_password = None, \
-               random_order = False, size = 10, quote = True, dialect = 'sqlite'):
+               random_order = False, size = 10, quoted = True, dialect = 'sqlite'):
     
     ddls = DBManager().get_schema(original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect)
     schema, primary_keys, foreign_keys = unify_schema(ddls, dialect= dialect)
-    sampled_stmts = sample_data_by_queries(schema= schema, queries= queries, random_order= random_order, size= size - 2, dialect= dialect, quote= quote)
+    sampled_stmts = sample_data_by_queries(schema= schema, queries= queries, random_order= random_order, size= size, dialect= dialect, quote= quoted)
     sample = get_sampled_data(sampled_stmts, original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect )
     ## ensure row size 
-    stmts = ensure_row_size(schema, primary_keys, sample, size = size, quoted = quote, dialect= dialect)
+    stmts = ensure_row_size(schema, primary_keys, sample, size = size, quoted = quoted, dialect= dialect)
     if stmts:
         append_data = get_sampled_data(stmts,  original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect)
         for table_name, data in append_data.items():
             sample[table_name].extend(data)
     
     sample = ensure_data_dependency(schema, foreign_keys= foreign_keys, datasets= sample, size = size, host_or_path= original_host_or_path, database= original_database,\
-                                    port = original_port, username= original_username, password= original_password, quoted= quote, dialect= dialect)
+                                    port = original_port, username= original_username, password= original_password, quoted= quoted, dialect= dialect)
     
     ## convert dataframe to SQL insert statements
     inserts = []
     for table_name in topo_tables(schema, foreign_keys):
         data = sample.get(table_name, [])
-        columns = [exp.Column(this = exp.to_identifier(col, quoted= quote)) for col in schema.column_names(table_name)]
-        table_identifier = exp.to_identifier(table_name, quoted= quote)
+        columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
+        table_identifier = exp.to_identifier(table_name, quoted= quoted)
         
         expressions = []
 
@@ -117,7 +117,12 @@ def sample_data_by_queries(schema: MappingSchema, queries: Union[str, List[str]]
     
     samples = {}
     for query in queries:
-        statements = extract_predicates3(schema, query= query, quote= quote, dialect= dialect)
+        try:
+            expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote, qualify_columns= False)
+        except Exception as e:
+            expr = parse_one(str(query), dialect = dialect)
+        statements = process_query(schema= schema, expression= expr, dialect= dialect, quoted= quote)
+
         for table_name, stmt in statements.items():
             if table_name in samples:
                 samples[table_name] = exp.union(samples[table_name], stmt, dialect= dialect)
@@ -130,45 +135,41 @@ def sample_data_by_queries(schema: MappingSchema, queries: Union[str, List[str]]
         samples[table_name] = samples[table_name].sql(dialect = dialect)
     return samples
 
-
-def extract_predicates3(schema: MappingSchema, query: str, dialect: str, quote: bool):
-    '''
-        Extract predicates from SQL qeury. Return {table_name: stmt}. E.g.
-        >>> SELECT COUNT(T2.School) FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T2.County = 'Los Angeles' AND T2.Charter = 0 AND CAST(T1.`Free Meal Count (K-12)` AS REAL) * 100 / T1.`Enrollment (K-12)` < 0.18
-
-        >>> SELECT T1.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE CAST(T1.`Free Meal Count (K-12)` AS REAL) * 100 / T1.`Enrollment (K-12)` < 0.18
-        >>> SELECT T2.* FROM frpm AS T1 INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode WHERE T2.County = 'Los Angeles' AND T2.Charter = 0
-    '''
-    try:
-        expr = qualify.qualify(parse_one(str(query), dialect = dialect), schema= schema, quote_identifiers= quote, qualify_columns= False)
-    except Exception as e:
-        expr = parse_one(str(query), dialect = dialect)
-
-    selects = expr.find_all(exp.Select) ## all selects within the query
+def process_query(schema: MappingSchema, expression: exp.Expression, dialect: str, quoted: bool,\
+                  ctes: Optional[Dict[str, exp.Expression]] = None) -> Dict[str, exp.Select]:
     statements = {}
-    table_alias = defaultdict(list)
-    for select in selects:
-        for tbl in select.find_all(exp.Table):
+    ctes = ctes or {}
+    expression = expression.unnest()
+    with_ = expression.args.get("with")
+    if with_:
+        ctes = ctes.copy()
+        for cte in with_.expressions:
+            ctes[cte.alias] = cte.this
+    
+    if isinstance(expression, exp.Select):
+        for tbl in expression.find_all(exp.Table):
             tbl_name = tbl.name.lower()
-            table_alias[tbl_name].append(tbl.alias_or_name)
-            columns = [exp.Column(this = exp.to_identifier(col, quoted= quote), table = tbl.alias) for col in schema.column_names(tbl_name, dialect= dialect)]
-            stmt = select.copy()
+            stmt = expression.copy()
+            columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted), table = tbl.alias) for col in schema.column_names(tbl_name, dialect= dialect)]
             stmt.set('expressions', columns)
-            stmt.set('distinct', None)
-            stmt.set('order', None)
-            stmt.set('limit', None)
-            stmt.set('group', None)
-            stmt.set('having', None)
-            statements[tbl.alias_or_name] =  stmt
-
-    stmts = {}
-    for tbl_name, tbl_alias in table_alias.items():
-        if len(tbl_alias) > 1:
-            stmt = reduce(lambda x, y : exp.union(statements[x], statements[y]), tbl_alias)
-        else:
-            stmt = statements[tbl_alias.pop()]
-        stmts[tbl_name] = stmt
-    return stmts
+            for keyword in ['distinct', 'order', 'limit', 'group', 'having']:
+                stmt.set(keyword, None)
+            statements[tbl_name] =  stmt
+    elif isinstance(expression, exp.Union):
+        left = process_query(schema= schema, expression= expression.left, dialect= dialect, quoted= quoted, ctes= ctes)
+        right = process_query(schema= schema, expression= expression.right, dialect= dialect, quoted= quoted, ctes= ctes)
+        
+        for table_name, stmt in left.items():
+            tmp = stmt
+            if table_name in right:
+                tmp = exp.union(tmp, right.pop(table_name), dialect= dialect)
+            statements[table_name] = tmp        
+        for table_name, stmt in right.items():
+            statements[table_name] = stmt
+    else:
+        raise ValueError(f'Unsupported expression: {expression}')
+    
+    return statements
 
 def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, port = None, username = None, password = None, dialect = 'sqlite') -> Dict[str, List]:
     datasets = defaultdict(list)
