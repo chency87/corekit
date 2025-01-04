@@ -5,8 +5,10 @@ from packaging.version import Version
 if Version(SQLALCHEMY_VERSION) < Version("1.5"):
     from sqlalchemy.engine import URL, Engine, Connection
     from sqlalchemy import create_engine, text, MetaData
+    from sqlalchemy.orm import sessionmaker
 else:
     from sqlalchemy import create_engine, text, Connection, MetaData, Engine, URL
+    from sqlalchemy.orm import sessionmaker
 
 from threading import Lock
 from typing import List, Tuple, Any, Dict, Union, Literal, overload
@@ -190,18 +192,43 @@ class DBManager(metaclass = singletonMeta):
         engine = self._assert_engine(conn_str)
         metadata = MetaData()
         metadata.reflect(bind = engine)
-        with engine.connect() as conn:
+
+        Session = sessionmaker(bind= engine)
+
+        with Session() as session:
+            
             for table_name, table in metadata.tables.items():
-                result = conn.execute(table.select())
+                result = session.execute(table.select())
                 if to_format.upper() == 'DATAFRAME':
                     columns = list(table.columns.keys())
                     records[table_name] = [columns]
                     for row in result:
-                        row = row._asdict()
-                        values = [escape_value(value) for value in row.values()]
-                        records[table_name].append(values)
+                        records[table_name].append(tuple(row))
                 elif to_format.upper() == 'Dict':
                     records[table_name] = [dict(row) for row in result]
+
+                columns = list(table.columns.keys())
+                records[table_name] = [columns]
+                # for row in result.fetchall():
+                #     print(tuple(row))
+                #     records[table_name].append(tuple(row))
+            ...
+        # with engine.connect() as conn:
+        #     for table_name, table in metadata.tables.items():
+        #         result = conn.execute(table.select())
+                
+        #         if to_format.upper() == 'DATAFRAME':
+        #             columns = list(table.columns.keys())
+        #             records[table_name] = [columns]
+        #             for row in result:
+        #                 records[table_name].append(tuple(row))
+                    
+        #             # for row in result:
+        #             #     row = row._asdict()
+        #             #     values = [escape_value(value) for value in row.values()]
+        #             #     records[table_name].append(values)
+        #         elif to_format.upper() == 'Dict':
+        #             records[table_name] = [dict(row) for row in result]
         return records
 
     def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]], str], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
@@ -222,7 +249,6 @@ class DBManager(metaclass = singletonMeta):
                 columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
                 ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
                 ddls.append(ddl.sql(dialect= dialect))
-        
         else:
             try:
                 for ddl in parse(schemas, read = dialect):
