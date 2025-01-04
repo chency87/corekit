@@ -17,7 +17,6 @@ from .. import singletonMeta
 import random, logging, os
 from sqlglot import parse_one, exp, parse
 from sqlglot.schema import MappingSchema
-from prettytable import PrettyTable
 
 logger = logging.getLogger(f'src.db_manager')
 
@@ -35,7 +34,7 @@ class Connect:
                 parameters: Optional[Any] = ...,
                 fetch: None = ...,
                 commit: bool = ...,
-                format_: str = ...) -> None:
+                with_column_name: bool = ...) -> None:
         ...
     
     @overload
@@ -43,38 +42,20 @@ class Connect:
                 parameters: Optional[Any] = ...,
                 fetch: Union[Literal['all', 'one', '1', 'random'], int] = ...,
                 commit: bool = ...,
-                format_: Literal['list'] = ...
+                with_column_name: bool = ...
                 ) -> List[Tuple[Any]]:
-        ...
-    @overload
-    def execute(self, stmt: str, 
-                parameters: Optional[Any] = ...,
-                fetch: Union[Literal['all', 'one', '1', 'random'], int] = ...,
-                commit: bool = ...,
-                format_: Literal['dict'] = ...
-                ) -> List[Dict[str, Any]]:
-        ...
-    @overload
-    def execute(self, stmt: str, 
-                parameters: Optional[Any] = ...,
-                fetch: Union[Literal['all', 'one', '1', 'random'], int] = ...,
-                commit: bool = ...,
-                format_: Literal['pretty'] = ...
-                ) -> PrettyTable:
         ...
 
     def execute(self, stmt, parameters: Optional[Any] = None, 
                 fetch: Optional[Union[Literal['all', 'one', '1', 'random'], int]] = 'all', 
                 commit: bool = False,
-                format_: Literal['dataframe', 'tuple', 'dict'] = 'tuple'):
+                with_column_name: bool = False):
         r = self.conn.execute(text(stmt), parameters = parameters)
-        results = self._fetch_query_results(r, fetch= fetch)
+        results = self._fetch_query_results(r, fetch= fetch, with_column_name = with_column_name)
         if commit:
             self.conn.commit()
-        if results:
-            results = self._format_query_results(results= results, format_= format_)
         return results
-    def _fetch_query_results(self, cursor_result, fetch: Optional[Union[Literal['all', 'one', '1', 'random'], int]]):
+    def _fetch_query_results(self, cursor_result, fetch: Optional[Union[Literal['all', 'one', '1', 'random'], int]], with_column_name ):
         results_sizes = {
             'all' : lambda cur: cur.fetchall(),
             'one':  lambda cur: cur.fetchone(),
@@ -87,26 +68,17 @@ class Connect:
             results = results_sizes.get(fetch)(cursor_result)
         elif isinstance(fetch, int):
             results = cursor_result.fetchmany(fetch)
-        return results
-    
-    def _format_query_results(self, results, format_):
-        
-        if format_ == 'tuple':
-            records = [tuple(row) for row in results]
-            # for row in results:
-            #     records.append(tuple(row))
-            return records
-        elif format_ == 'dict':
-            records = [{name:value for name, value in row._asdict().items()} for row in results]
-            return records
-        elif format_ == 'pretty':
-            tbl = PrettyTable()
+        column_names = []
+        if results:
+            records = []
             for row in results:
                 row = row._asdict()
-                tbl.field_names = list(row.keys())
-                tbl.add_row([row[n] for n in tbl.field_names])
-            return tbl
-        raise ValueError(f'Unsupported format: {format_}')
+                column_names = list(row.keys())
+                records.append(tuple(row[name] for name in column_names))
+            results = records
+        if with_column_name and column_names:
+            results.insert(0, tuple(column_names))
+        return results
     def create_tables(self, *ddls):
         for ddl in ddls:
             self.execute(ddl, fetch= None)

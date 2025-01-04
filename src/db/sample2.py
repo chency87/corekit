@@ -45,9 +45,6 @@ def sample_small_database(queries: List[str], original_host_or_path, original_da
         schema, primary_keys = remove_tables(schema, primary_keys= primary_keys, queries= queries, dialect= dialect)
 
     sampled_stmts = sample_data_by_queries(schema= schema, queries= queries, random_order= random_order, size= size, dialect= dialect, quote= quoted)
-
-    # print(sampled_stmts)
-
     sample = get_sampled_data(sampled_stmts, original_host_or_path, original_database, original_port, original_username, original_password, dialect= dialect )
     ## ensure row size 
     if max_row_size:
@@ -254,17 +251,12 @@ def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, po
     datasets = defaultdict(list)
     with DBManager().get_connection(host_or_path, database, port, username, password, dialect) as conn:
         for table_name, stmt in stmts.items():
-            results = conn.execute(stmt, fetch= 'all', format_= 'dict')
-            for row in results:
-                values = {name.lower(): value for name, value in row.items()}
-                datasets[table_name].append(values)
-
-            # datasets[table_name].extend(results)
-
-            # for row in results:
-            #     row = row._asdict()
-            #     values = {name.lower(): value for name, value in row.items()}
-            #     datasets[table_name].append(values)
+            results = conn.execute(stmt, fetch= 'all', with_column_name= True)
+            if results:
+                column_names = results.pop(0)
+                for row in results:
+                    values = {name.lower(): row[index] for index, name in enumerate(column_names)}
+                    datasets[table_name].append(values)
     return datasets
 
 
