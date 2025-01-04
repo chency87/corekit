@@ -7,7 +7,7 @@ from datetime import date, datetime
 from dataclasses import dataclass
 from functools import reduce
 import logging
-
+from .helper import convert
 from .db_manage import DBManager
 
 logger = logging.getLogger('src.db.sample')
@@ -21,8 +21,8 @@ class ForeignKey:
     to_column: str
 def escape_value(value):
     """Escape single quotes and special characters in SQL strings."""
-    if value is None:
-        return "NULL"
+    if value is None or value == 'NULL':
+        return None
     elif isinstance(value, str):
         return value.replace(':', '\:')   # Escape single quotes
     elif isinstance(value, int):
@@ -80,12 +80,10 @@ def unify_insert_stmt(schema: MappingSchema, foreign_keys: List[ForeignKey], dat
         data = datasets.get(table_name, [])
         columns = [exp.Column(this = exp.to_identifier(col, quoted= quoted)) for col in schema.column_names(table_name)]
         table_identifier = exp.to_identifier(table_name, quoted= quoted)
-        # placeholders = [exp.Placeholder(this = str(col)) for col in schema.column_names(table_name)]
-
         if data:
             values = []
             for row in data:
-                values.append(exp.tuple_(*(exp.convert(escape_value(row[col])) for col in schema.column_names(table_name))))
+                values.append(exp.tuple_(*(convert(row[col]) for col in schema.column_names(table_name))))
 
             insert_stmt = exp.Insert(this = exp.Schema(this = exp.Table(this = table_identifier), expressions = columns), expression = exp.Values(expressions = values))
             
@@ -256,11 +254,17 @@ def get_sampled_data(stmts: Dict[str, str], host_or_path: str, database: str, po
     datasets = defaultdict(list)
     with DBManager().get_connection(host_or_path, database, port, username, password, dialect) as conn:
         for table_name, stmt in stmts.items():
-            results = conn.execute(stmt, fetch= 'all')
+            results = conn.execute(stmt, fetch= 'all', format_= 'dict')
             for row in results:
-                row = row._asdict()
                 values = {name.lower(): value for name, value in row.items()}
                 datasets[table_name].append(values)
+
+            # datasets[table_name].extend(results)
+
+            # for row in results:
+            #     row = row._asdict()
+            #     values = {name.lower(): value for name, value in row.items()}
+            #     datasets[table_name].append(values)
     return datasets
 
 
@@ -285,7 +289,7 @@ def ensure_row_size(schema: MappingSchema, primary_keys, datasets, size, quoted 
             if not values:
                 continue
             
-            where.append(exp.Not(this = exp.In(this = exp.to_column(pk, quoted= quoted), expressions = [exp.convert(c) for c in values])))
+            where.append(exp.Not(this = exp.In(this = exp.to_column(pk, quoted= quoted), expressions = [convert(c) for c in values])))
         
         if where:
             where = reduce(lambda x, y : exp.And(this = x, expression =y), where)
@@ -314,14 +318,7 @@ def get_foreign_key_dependent_condition(foreign_keys: List, table_name, datasets
             conditions[fk.to_column].update(data)
             to_data = get_dependent_data(datasets= datasets, table_name= fk.to_table, column_name= fk.to_column, schema= schema)
             conditions[fk.to_column].update(to_data)
-    
-    # where = [f"{column} in {exp.tuple_(*(exp.convert(c) for c in condition)).sql()}" for column, condition in conditions.items() if condition]
-
-    # for column, dep_data in conditions.items():
-    #     if dep_data:
-    #         exp.In(this = exp.to_column(column, quoted= True), expressions = [exp.convert(c) for c in dep_data])
-
-    where = [exp.In(this = exp.to_column(column, quoted= True), expressions = [exp.convert(c) for c in dep_data]) for column, dep_data in conditions.items() if dep_data]
+    where = [exp.In(this = exp.to_column(column, quoted= True), expressions = [convert(c) for c in dep_data]) for column, dep_data in conditions.items() if dep_data]
     condition = None
     if where:
         condition = reduce(lambda x, y : exp.And(this = x, expression =y), where)
