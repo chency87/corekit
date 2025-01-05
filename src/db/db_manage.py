@@ -101,7 +101,7 @@ class Connect:
         '''
         self.execute(stmt, parameters= data, commit = True, fetch= None)
     
-    def get_schema(self):
+    def get_schema(self) -> str:
         '''
             Return all table names within database    
         '''
