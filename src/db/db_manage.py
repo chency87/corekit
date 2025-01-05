@@ -23,6 +23,15 @@ logger = logging.getLogger(f'src.db_manager')
 class Connect:
     def __init__(self, connection: Connection):
         self.conn: Connection = connection
+        self._metadata = None
+    @property
+    def metadata(self):
+        if self._metadata is None:
+            engine = self.conn.engine
+            self._metadata = MetaData()
+            self.metadata.reflect(bind = engine)
+        return self._metadata
+    
     def __enter__(self):
         return self   
     def __exit__(self, exc_type, exc_value, exc_tb):
@@ -51,7 +60,9 @@ class Connect:
                 commit: bool = False,
                 with_column_name: bool = False):
         r = self.conn.execute(text(stmt), parameters = parameters)
-        results = self._fetch_query_results(r, fetch= fetch, with_column_name = with_column_name)
+        results = None
+        if fetch:
+            results = self._fetch_query_results(r, fetch= fetch, with_column_name = with_column_name)
         if commit:
             self.conn.commit()
         return results
@@ -71,10 +82,9 @@ class Connect:
         column_names = []
         if results:
             records = []
+            column_names = tuple(cursor_result.keys())
             for row in results:
-                row = row._asdict()
-                column_names = list(row.keys())
-                records.append(tuple(row[name] for name in column_names))
+                records.append(tuple(row))
             results = records
         if with_column_name and column_names:
             results.insert(0, tuple(column_names))
@@ -90,8 +100,55 @@ class Connect:
             INSERT data into tables accordingly. 
         '''
         self.execute(stmt, parameters= data, commit = True, fetch= None)
-        
     
+    def get_schema(self):
+        '''
+            Return all table names within database    
+        '''
+        schema = []
+        for _, table in self.metadata.tables.items():
+            ddl = str(CreateTable(table).compile(compile_kwargs={"literal_binds": True}))
+            ddl = ddl.replace('watermark', '"watermark"')
+            schema.append(ddl)
+        return ';\n'.join(schema)
+
+    def get_table_rows(self, table_name: str):
+        '''
+            Return all rows in table named `table_name`
+        '''
+        table = self.metadata.tables[table_name]
+        stmt = str(table.select().compile(compile_kwargs={"literal_binds": True}))
+        return self.execute(stmt= stmt, fetch= 'all', with_column_name= True)
+    
+    def get_all_table_rows(self) -> Dict[str, List[Tuple[Any]]]:
+        '''
+            Return all contents of target database. 
+            Return:
+                {tbl : [(table columns), (rows)]}
+        '''
+        content = {}
+        for table_name, table in self.metadata.tables.items():
+            stmt = str(table.select().compile(compile_kwargs={"literal_binds": True}))
+            content[table_name] = self.execute(stmt= stmt, fetch= 'all', with_column_name= True)
+        return content
+
+
+    def export_database(self) -> List[str]:
+        '''
+            Export entire database. Return a list of DDL and INSERT Statements
+        '''
+        schema = self.get_schema()
+        inserts = []
+        for table_name, table in self.metadata.tables.items():
+            rows = self.conn.execute(table.select())
+            values = []
+            for row in rows.fetchall():
+                values.append(row._asdict())
+            insert = table.insert().values(values).compile(compile_kwargs={"literal_binds": True})
+            inserts.append(str(insert))
+        return [schema, *inserts]
+
+
 class DBManager(metaclass = singletonMeta):
     '''
         Maintain a connection pool to connect to various databases. Use as 
@@ -147,24 +204,7 @@ class DBManager(metaclass = singletonMeta):
         metadata = MetaData()
         metadata.reflect(bind = engine)
         metadata.drop_all(bind= engine)
-        
-        
 
-    def get_schema(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> str:
-        '''
-            Return Schema definitaion of target database, return with a str. all ddls are connected by ';'
-        '''
-        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
-        engine = self._assert_engine(conn_str)
-        metadata = MetaData()
-        metadata.reflect(bind = engine)
-        schema = []
-        for table_name, table in metadata.tables.items():
-            ddl = str(CreateTable(table).compile(engine))
-            ddl = ddl.replace('watermark', '"watermark"')
-            schema.append(ddl)
-        return ';\n'.join(schema)
-        
     def _get_checkouts(self, host_or_path) -> int:
         '''
             Return the count of connections in use
@@ -187,81 +227,7 @@ class DBManager(metaclass = singletonMeta):
                 engine.dispose()
                 del self.engines[host_or_path][conn_str]
         logger.debug(f'Cleaned {unused} unused connections in the connection pool')
-
-    def export_database(self, host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite') -> List[str]:
-        '''
-            Export entire database. Return a list of DDL and INSERT Statements
-        '''
-        database_dump = []
-        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
-        engine = self._assert_engine(conn_str)
-        metadata = MetaData()
-        metadata.reflect(bind = engine)
-        with engine.connect() as conn:
-            for table_name, table in metadata.tables.items():
-                database_dump.append(str(CreateTable(table).compile(engine)).replace('\n',' ').replace('\t', ' ') + ';')
-                
-                result = conn.execute(table.select())
-                for row in result:
-                    row = row._asdict()
-                    columns = ", ".join([f"`{k}`" for k in row.keys()])
-                    values = ', '.join(escape_value(value) for value in row.values())    
-                    insert_stmt = f"INSERT INTO {table_name} ({columns}) VALUES ({values});"
-                    database_dump.append(insert_stmt)
-        return database_dump
     
-    def export_db_rows(self, host_or_path, database, port = None, username = None, password = None, to_format: Literal['DATAFRAME', 'DICT'] = 'DATAFRAME', dialect = 'sqlite') -> Dict[str, Any]:
-        records = {}
-        conn_str = self.CONNECTION_STR_MAPPING[dialect](host_or_path, database= database, port= port, username= username, password= password)
-        engine = self._assert_engine(conn_str)
-        metadata = MetaData()
-        metadata.reflect(bind = engine)
-        Session = sessionmaker(bind= engine)
-        with Session() as session:
-            for table_name, table in metadata.tables.items():
-                result = session.execute(table.select())
-                if to_format.upper() == 'DATAFRAME':
-                    columns = list(table.columns.keys())
-                    records[table_name] = [columns]
-                    for row in result:
-                        records[table_name].append(tuple(row))
-                elif to_format.upper() == 'Dict':
-                    records[table_name] = [dict(row) for row in result]
-                columns = list(table.columns.keys())
-                records[table_name] = [columns]
-        return records
-
-    
-    def create_database(self, schemas: Union[List[str], Dict[str, Dict[str, str]], str], inserts: List[str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
-        '''
-            Create a database instance on target host_or_path.
-        '''
-        if isinstance(schemas, MappingSchema):
-            schemas = schemas.mapping
-            
-        ddls = []
-        if isinstance(schemas, list):
-            ddls.extend(schemas)
-        elif isinstance(schemas, dict):
-            '''
-            we should convert Dict schema to ddl firs
-            '''
-            for table_name, column_defs in schemas.items():
-                columns = [exp.ColumnDef(this = exp.to_identifier(column_name, quoted = True), kind = exp.DataType.build(column_typ)) for column_name, column_typ in column_defs.items()]
-                ddl = exp.Create(this = exp.Schema(this = exp.to_identifier(table_name, quoted = True) , expressions = columns), exists = True, kind = 'TABLE')
-                ddls.append(ddl.sql(dialect= dialect))
-        else:
-            try:
-                for ddl in parse(schemas, read = dialect):
-                    ddls.append(ddl.sql(dialect= dialect))
-            except Exception as e:
-                raise ValueError(f'cannot parse schema {schemas}. {e}')
-        
-        with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
-            conn.create_tables(*ddls)
-            for insert_stmt in inserts:
-                conn.execute(insert_stmt, fetch= None, commit= True)
-
     def create_schema(self, schemas: Union[List[str], Dict[str, Dict[str, str]], str], host_or_path, database, port = None, username = None, password = None, dialect = 'sqlite'):
         if isinstance(schemas, MappingSchema):
             schemas = schemas.mapping
@@ -286,20 +252,3 @@ class DBManager(metaclass = singletonMeta):
         with self.get_connection(host_or_path, database, port, username, password, dialect) as conn:
             conn.create_tables(*ddls)
     
-from datetime import date, datetime
-def escape_value(value):
-    """Escape single quotes and special characters in SQL strings."""
-    if value is None:
-        return "NULL"
-    elif isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"  # Escape single quotes
-    elif isinstance(value, int):
-        return int(value)
-    elif isinstance(value, float):
-        return float(value)
-    elif isinstance(value, date):
-        return escape_value(value.strftime('%Y-%m%d'))
-    elif isinstance(value, datetime):
-        return escape_value(value.strftime('%Y-%m%d %H:%M%S'))
-    else:
-        return value  # Use repr for other types
